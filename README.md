@@ -5,8 +5,9 @@ GNOME Shell extension and tray controls. The name is a working suggestion, not a
 claim of name or trademark availability.
 
 This is an early migration project. Rust owns the public D-Bus service,
-authorization, configuration-patch validation, lifecycle intent and status
-snapshots. A private Python subprocess retains the pinned Wi-Fi Relay networking
+authorization, the complete configuration schema and credential store, Linux
+interface inventory, lifecycle intent and status snapshots. A private Python
+subprocess retains the pinned Wi-Fi Relay networking
 implementation, including create_ap and the experimental NetworkManager backend.
 This is not yet an entirely Rust networking stack or a production replacement.
 
@@ -14,10 +15,11 @@ This is not yet an entirely Rust networking stack or a production replacement.
 
 Requires Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
-results are recorded in [validation](docs/validation.md).
+results are recorded in [the initial validation](docs/validation.md) and
+[native configuration migration](docs/native-configuration.md).
 
 ```sh
-cargo build --workspace --locked
+cargo build --workspace --all-targets --locked
 cargo test --workspace --locked
 python3 tools/check-vendor.py
 dbus-run-session -- /usr/bin/python3 -m unittest discover -s tests -v
@@ -46,6 +48,23 @@ branding. `--demo-deny` tests denied requests; `--demo-polkit` tests the real
 Polkit call path against an authority on the disposable bus. Neither connects to
 the system bus. Standalone mode authorizes callers with the same UID only.
 
+To test native persistence without networking, create a new private configuration
+in an existing directory owned by your user, then start a demo using that file:
+
+```sh
+./target/debug/relayforge-service --init-config /absolute/private/directory/hotspot.conf \
+  --ssid "My hotspot" --wifi-interface wlp2s0
+dbus-run-session -- ./target/debug/relayforge-service \
+  --demo-config /absolute/private/directory/hotspot.conf
+```
+
+Initialization creates a random password, writes mode 0600 and never replaces an
+existing path. It does not detect the build machine's adapters. The optional
+SSID/interface arguments set fresh-install values only; no password is printed.
+`--demo-config` uses the same native disk store as system mode and simulated
+networking. GTK controls can connect with the private-bus environment from the
+previous example.
+
 ## Compatibility and deployment boundary
 
 The service preserves `io.github.erhanzeyrek.WifiHotspot`, its object path, all ten
@@ -62,13 +81,13 @@ relayforge-service --system --legacy-root /usr/lib/relayforge
 
 The installation root must contain `compat/worker.py` and `vendor/wifi-relay/`.
 It and every parent/payload file must be root-owned and not group/world writable;
-symlinks are rejected. A root-owned regular `/etc/wifi-hotspot.conf` with mode
-0600 is required. There is no factory-password or user-config fallback in system
+symlinks are rejected. A root-owned, single-link regular `/etc/wifi-hotspot.conf`
+with mode 0600 and an explicit PASSPHRASE is required. There is no factory-password or user-config fallback in system
 mode. Existing D-Bus and Polkit policies must be installed for the compatibility
 name. System mode always uses Polkit; demo authorization cannot enable it.
 
 No installer, automatic service replacement, system activation change, package
-release, or live networking trial is supplied by this first milestone. Run only
+release, or live networking trial is supplied by this development project. Run only
 in a prepared disposable environment until the migration and hardware gates in
 [the architecture plan](docs/architecture.md) are completed. The original
 checkout, installed services and networking configuration are independent of this

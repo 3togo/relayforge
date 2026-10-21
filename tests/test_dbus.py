@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
@@ -23,7 +24,7 @@ gi.require_version('Gio', '2.0')
 from gi.repository import Gio, GLib
 from service_client import ServiceClient, decode_reply, BUS_NAME, OBJECT_PATH
 
-BINARY = ROOT / 'target/debug/relayforge-service'
+BINARY = Path(os.environ.get('RELAYFORGE_BINARY', ROOT / 'target/debug/relayforge-service'))
 
 
 def connect():
@@ -51,9 +52,9 @@ def wait_for(predicate, seconds=5):
 
 
 @contextlib.contextmanager
-def running(mode='--demo'):
+def running(mode='--demo', *arguments):
     bus = connect()
-    with subprocess.Popen([str(BINARY), mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+    with subprocess.Popen([str(BINARY), mode, *map(str, arguments)], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
             last_error = []
             def ready():
@@ -113,6 +114,105 @@ def fake_polkit(allowed=True):
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_native_config_survives_restart_and_legacy_reader_sees_exact_values(self):
+        with tempfile.TemporaryDirectory(prefix='relayforge-config-') as directory:
+            path = Path(directory) / 'hotspot.conf'
+            created = subprocess.run([str(BINARY), '--init-config', str(path), '--ssid', 'Persistent',
+                                      '--wifi-interface', 'wlp2s0'], capture_output=True, timeout=5)
+            self.assertEqual(created.returncode, 0, created.stderr)
+            original = path.read_bytes()
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with running('--demo-config', path) as (bus, _):
+                before = decode_reply('GetConfig', call(bus, 'GetConfig'))
+                self.assertEqual(len(before['PASSPHRASE']), 32)
+                self.assertEqual(before['WIFI_IFACE'], 'wlp2s0')
+                patch = {'SSID': 'Changed SSID', 'PASSPHRASE': "literal =#'\\$() spaces "}
+                call(bus, 'SetConfig', GLib.Variant('(s)', (json.dumps(patch),)))
+                saved = decode_reply('GetConfig', call(bus, 'GetConfig'))
+                self.assertEqual(saved['PASSPHRASE'], patch['PASSPHRASE'])
+                self.assertNotEqual(path.read_bytes(), original)
+                # The pinned engine uses split-on-first '=' and literal values.
+                values = dict(line.split('=', 1) for line in path.read_text().splitlines()
+                              if line and not line.startswith('#') and '=' in line)
+                self.assertEqual(values, saved)
+            with running('--demo-config', path) as (bus, _):
+                self.assertEqual(decode_reply('GetConfig', call(bus, 'GetConfig')), saved)
+            retained = path.read_bytes()
+            repeated = subprocess.run([str(BINARY), '--init-config', str(path)], capture_output=True, timeout=5)
+            self.assertEqual(repeated.returncode, 0)
+            self.assertEqual(path.read_bytes(), retained)
+            self.assertNotIn(saved['PASSPHRASE'].encode(), created.stdout + created.stderr + repeated.stdout + repeated.stderr)
+
+    def test_native_validation_checks_merged_psk_and_preserves_failed_save(self):
+        with running() as (bus, _):
+            original = decode_reply('GetConfig', call(bus, 'GetConfig'))
+            for patch in [{'USE_PSK': '1'}, {'PASSPHRASE': 'a' * 64},
+                          {'SSID': 'invisible\u200b'}, {'SSID': 'nonbreaking\u00a0space'}]:
+                with self.assertRaises(GLib.Error):
+                    call(bus, 'SetConfig', GLib.Variant('(s)', (json.dumps(patch),)))
+                self.assertEqual(decode_reply('GetConfig', call(bus, 'GetConfig')), original)
+            patch = {'USE_PSK': '1', 'PASSPHRASE': 'a' * 64}
+            call(bus, 'SetConfig', GLib.Variant('(s)', (json.dumps(patch),)))
+            call(bus, 'SetConfig', GLib.Variant('(s)', ('{"SSID":"PSK unchanged"}',)))
+            saved = decode_reply('GetConfig', call(bus, 'GetConfig'))
+            self.assertEqual(saved['PASSPHRASE'], 'a' * 64)
+            self.assertEqual(saved['USE_PSK'], '1')
+
+    def test_configuration_edits_wait_for_startup_and_survive_cancellation(self):
+        with running() as (bus, _):
+            results, errors = {}, []
+            def request(key, method, params=None):
+                connection = connect()
+                try:
+                    results[key] = decode_reply(method, call(connection, method, params))
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    connection.close_sync(None)
+            start = threading.Thread(target=request, args=('start', 'Start'))
+            start.start()
+            wait_for(lambda: decode_reply('GetStatus', call(bus, 'GetStatus'))['state'] == 'connecting')
+            edit = threading.Thread(target=request, args=('save', 'SetConfig',
+                                    GLib.Variant('(s)', ('{"SSID":"After cancellation"}',))))
+            edit.start()
+            self.assertTrue(decode_reply('Stop', call(bus, 'Stop')))
+            start.join(5)
+            edit.join(5)
+            self.assertFalse(start.is_alive())
+            self.assertFalse(edit.is_alive())
+            self.assertFalse(errors)
+            self.assertFalse(results['start']['success'])
+            self.assertTrue(results['save'])
+            self.assertEqual(decode_reply('GetConfig', call(bus, 'GetConfig'))['SSID'], 'After cancellation')
+            self.assertEqual(decode_reply('GetStatus', call(bus, 'GetStatus'))['state'], 'idle')
+
+    def test_malformed_external_configuration_does_not_break_status_or_echo_secrets(self):
+        with tempfile.TemporaryDirectory(prefix='relayforge-config-') as directory:
+            path = Path(directory) / 'hotspot.conf'
+            subprocess.run([str(BINARY), '--init-config', str(path)], check=True, capture_output=True, timeout=5)
+            with running('--demo-config', path) as (bus, _):
+                path.write_text('PASSPHRASE=do-not-echo-secret\nUNKNOWN=bad\n')
+                with self.assertRaises(GLib.Error) as error:
+                    call(bus, 'GetConfig')
+                self.assertNotIn('do-not-echo-secret', str(error.exception))
+                self.assertFalse(decode_reply('GetStatus', call(bus, 'GetStatus'))['active'])
+                decode_reply('GetInterfaces', call(bus, 'GetInterfaces'))
+                path.write_text('SSID=Incomplete\n')
+                with self.assertRaises(GLib.Error):
+                    call(bus, 'Start')
+                self.assertFalse(decode_reply('GetStatus', call(bus, 'GetStatus'))['active'])
+
+    def test_backend_switch_is_blocked_until_stopped_but_ordinary_edits_are_retained(self):
+        with running() as (bus, _):
+            self.assertTrue(decode_reply('Start', call(bus, 'Start'))['success'])
+            call(bus, 'SetConfig', GLib.Variant('(s)', ('{"SSID":"Next startup"}',)))
+            with self.assertRaises(GLib.Error):
+                call(bus, 'SetConfig', GLib.Variant('(s)', ('{"BACKEND":"networkmanager"}',)))
+            self.assertEqual(decode_reply('GetConfig', call(bus, 'GetConfig'))['BACKEND'], 'create_ap')
+            self.assertTrue(decode_reply('Stop', call(bus, 'Stop')))
+            call(bus, 'SetConfig', GLib.Variant('(s)', ('{"BACKEND":"networkmanager"}',)))
+            self.assertEqual(decode_reply('GetConfig', call(bus, 'GetConfig'))['BACKEND'], 'networkmanager')
+
     def test_polkit_receives_actual_caller_identity(self):
         with fake_polkit() as observed, running('--demo-polkit') as (bus, _):
             decode_reply('GetConfig', call(bus, 'GetConfig'))

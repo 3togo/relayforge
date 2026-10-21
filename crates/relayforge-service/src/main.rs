@@ -1,8 +1,10 @@
 mod backend;
+mod config_store;
+mod inventory;
 use backend::Worker;
 use relayforge_core::{
-    config::parse_patch, validate_reply, Lifecycle, Method, Status, BUS_NAME, MANAGE_ACTION,
-    OBJECT_PATH,
+    config::{self, parse_patch, Config},
+    validate_reply, Lifecycle, Method, Status, BUS_NAME, MANAGE_ACTION, OBJECT_PATH,
 };
 use serde_json::{json, Value};
 use std::{
@@ -20,7 +22,10 @@ struct Service {
     core: Arc<Mutex<Lifecycle>>,
     clients: Arc<Mutex<Value>>,
     worker: Option<Arc<Worker>>,
-    demo_config: Mutex<Value>,
+    configuration: Arc<Mutex<config_store::Store>>,
+    operations: tokio::sync::Mutex<()>,
+    config_users: tokio::sync::RwLock<()>,
+    demo: bool,
     demo_deny: bool,
     use_polkit: bool,
     demo_generation: std::sync::atomic::AtomicU64,
@@ -115,12 +120,65 @@ impl Service {
         let _permit = permits
             .try_acquire()
             .map_err(|_| fdo::Error::LimitsExceeded("Too many pending requests".into()))?;
+        // Serialize native configuration transactions with Start/band changes.
+        // Stop keeps its own budget and bypasses this gate to cancel startup.
+        let _operation = if method == Method::Stop {
+            None
+        } else {
+            Some(self.operations.lock().await)
+        };
+        // Start and Stop may overlap for cancellation, but neither may cross a
+        // configuration commit. This also closes the idle-check/Stop race.
+        let _save = if method == Method::SetConfig {
+            Some(self.config_users.write().await)
+        } else {
+            None
+        };
+        let _backend = if matches!(
+            method,
+            Method::Start | Method::Stop | Method::SwitchBandAndReconnect | Method::PrepareFirewall
+        ) {
+            Some(self.config_users.read().await)
+        } else {
+            None
+        };
+        match method {
+            Method::GetConfig => return self.load_config().await.map(|config| json!(config)),
+            Method::SetConfig => return self.save_config(params).await.map(|_| json!(true)),
+            Method::GetInterfaces => {
+                if self.demo {
+                    return Ok(
+                        json!({"wifi_interfaces":["demo0"],"all_interfaces":["demo0","demo1"]}),
+                    );
+                }
+                return tokio::task::spawn_blocking(|| {
+                    inventory::discover(Path::new("/sys/class/net"))
+                })
+                .await
+                .map_err(|_| fdo::Error::Failed("Interface discovery task failed".into()))?
+                .map(|found| json!(found))
+                .map_err(|error| fdo::Error::Failed(error.into()));
+            }
+            _ => {}
+        }
         let epoch = self
             .core
             .lock()
             .unwrap()
             .begin(method)
             .map_err(|s| fdo::Error::Failed(s.into()))?;
+        if method == Method::Start {
+            // Revalidate on every Start, after recording cancellation intent.
+            // Missing credentials must not reach the legacy factory fallback.
+            if let Err(error) = self.load_config().await {
+                self.core.lock().unwrap().complete(method, epoch, false);
+                self.emit_status(connection).await;
+                return Err(error);
+            }
+            if !self.core.lock().unwrap().is_current(epoch) {
+                return Ok(json!({"success":false,"error":"Startup cancelled"}));
+            }
+        }
         let result = match &self.worker {
             Some(worker) => worker.call(method, params).await,
             None => self.demo(method, params, connection).await,
@@ -177,10 +235,72 @@ impl Service {
         }
     }
 
+    async fn load_config(&self) -> fdo::Result<Config> {
+        let store = self.configuration.clone();
+        tokio::task::spawn_blocking(move || store.lock().unwrap().load())
+            .await
+            .map_err(|_| fdo::Error::Failed("Configuration read task failed".into()))?
+            .map_err(|error| fdo::Error::Failed(error.into()))
+    }
+
+    async fn save_config(&self, params: Value) -> fdo::Result<()> {
+        let patch: Config = serde_json::from_value(params)
+            .map_err(|_| fdo::Error::InvalidArgs("Expected string configuration values".into()))?;
+        let current = self.load_config().await?;
+        let merged = config::merge(&current, &patch)
+            .map_err(|error| fdo::Error::InvalidArgs(error.into()))?;
+        let switching = current["BACKEND"] != merged["BACKEND"];
+        if switching {
+            let idle = {
+                let core = self.core.lock().unwrap();
+                !core.status.active
+                    && !core.status.desired_active
+                    && !matches!(
+                        core.status.state.as_str(),
+                        "connecting" | "stopping" | "failed"
+                    )
+            };
+            if !idle {
+                return Err(fdo::Error::Failed(
+                    "Stop the hotspot before changing its backend".into(),
+                ));
+            }
+            if let Some(worker) = &self.worker {
+                // Fresh ownership/status inspection runs in the legacy operation queue.
+                // The Rust gate prevents a new Start until this transaction commits.
+                let observed = worker
+                    .call(Method::GetStatus, Value::Null)
+                    .await
+                    .map_err(|_| {
+                        fdo::Error::Failed(
+                            "Cannot confirm that the networking backend is stopped".into(),
+                        )
+                    })?;
+                validate_reply(Method::GetStatus, &observed)
+                    .map_err(|e| fdo::Error::Failed(e.into()))?;
+                let status: Status = serde_json::from_value(observed).unwrap();
+                if status.active
+                    || status.desired_active
+                    || status.error.is_some()
+                    || matches!(status.state.as_str(), "connecting" | "stopping" | "failed")
+                {
+                    return Err(fdo::Error::Failed(
+                        "Stop the hotspot before changing its backend".into(),
+                    ));
+                }
+            }
+        }
+        let store = self.configuration.clone();
+        tokio::task::spawn_blocking(move || store.lock().unwrap().save(&patch, switching))
+            .await
+            .map_err(|_| fdo::Error::Failed("Configuration save task failed".into()))?
+            .map_err(|error| fdo::Error::Failed(error.into()))
+    }
+
     async fn demo(
         &self,
         method: Method,
-        params: Value,
+        _params: Value,
         connection: &Connection,
     ) -> Result<Value, String> {
         use std::sync::atomic::Ordering;
@@ -192,12 +312,15 @@ impl Service {
                 if generation != self.demo_generation.load(Ordering::SeqCst) {
                     return Ok(json!({"success":false,"error":"Startup cancelled"}));
                 }
-                let config = self.demo_config.lock().unwrap().clone();
+                let config = self
+                    .load_config()
+                    .await
+                    .map_err(|_| "Cannot read demo configuration")?;
                 let status = Status {
                     active: true,
                     desired_active: true,
                     state: "active".into(),
-                    ssid: config["SSID"].as_str().unwrap_or("RelayForge Demo").into(),
+                    ssid: config["SSID"].clone(),
                     iface: "demo0".into(),
                     backend: "demo".into(),
                     band: "2.4".into(),
@@ -208,17 +331,6 @@ impl Service {
             Method::Stop => {
                 self.demo_generation.fetch_add(1, Ordering::SeqCst);
                 Ok(json!(true))
-            }
-            Method::GetConfig => Ok(self.demo_config.lock().unwrap().clone()),
-            Method::SetConfig => {
-                let mut config = self.demo_config.lock().unwrap();
-                for (key, value) in params.as_object().ok_or("Invalid config")? {
-                    config[key] = value.clone();
-                }
-                Ok(json!(true))
-            }
-            Method::GetInterfaces => {
-                Ok(json!({"wifi_interfaces":["demo0"],"all_interfaces":["demo0","demo1"]}))
             }
             Method::GetCapabilities => Ok(
                 json!({"ap_2ghz":true,"ap_5ghz":false,"current_sta_band":"2.4","ap_sta_concurrent":false,"demo":true}),
@@ -349,18 +461,6 @@ impl Service {
     ) -> zbus::Result<()>;
 }
 
-fn verify_private_config() -> Result<(), Box<dyn std::error::Error>> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata("/etc/wifi-hotspot.conf")?;
-    if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o777 != 0o600 {
-        return Err(
-            "Existing /etc/wifi-hotspot.conf must be a root-owned regular file with mode 0600"
-                .into(),
-        );
-    }
-    Ok(())
-}
-
 fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::MetadataExt;
     // Root executes only a root-owned installation, including all ancestor directories.
@@ -393,21 +493,70 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (demo,deny,use_polkit,root)=match args.as_slice() {
-        [mode] if mode=="--demo" => (true,false,false,None),
-        [mode] if mode=="--demo-deny" => (true,true,false,None),
-        [mode] if mode=="--demo-polkit" => (true,false,true,None),
-        [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path))),
-        _=>return Err("Usage: relayforge-service --demo | --demo-deny | --system --legacy-root /root-owned/installation".into()),
+    if args.first().map(String::as_str) == Some("--init-config") {
+        let path = args
+            .get(1)
+            .ok_or("--init-config requires an absolute path")?;
+        let mut ssid = "Hotspot";
+        let mut interface = None;
+        let mut pairs = args[2..].chunks_exact(2);
+        for pair in &mut pairs {
+            match pair[0].as_str() {
+                "--ssid" => ssid = pair[1].as_str(),
+                "--wifi-interface" => interface = Some(pair[1].as_str()),
+                _ => return Err("Unknown configuration initialization option".into()),
+            }
+        }
+        if !pairs.remainder().is_empty() {
+            return Err("Configuration initialization options require values".into());
+        }
+        // SAFETY: geteuid has no preconditions.
+        let file = config_store::ConfigFile::open(Path::new(path), unsafe { libc::geteuid() })?;
+        let created = file.initialize(ssid, interface)?;
+        eprintln!(
+            "{}",
+            if created {
+                "Initialized private configuration"
+            } else {
+                "Configuration already exists; left unchanged"
+            }
+        );
+        return Ok(());
+    }
+    let (demo,deny,use_polkit,root,config_path)=match args.as_slice() {
+        [mode] if mode=="--demo" => (true,false,false,None,None),
+        [mode] if mode=="--demo-deny" => (true,true,false,None,None),
+        [mode] if mode=="--demo-polkit" => (true,false,true,None,None),
+        [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
+        [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
+        _=>return Err("Usage: relayforge-service --demo | --demo-deny | --demo-polkit | --demo-config PATH | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
     };
     if !demo {
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } != 0 {
             return Err("System mode requires root".into());
         }
-        verify_private_config()?;
         verify_tree(root.as_ref().unwrap())?;
     }
+    let configuration = if let Some(path) = config_path {
+        // SAFETY: geteuid has no preconditions.
+        let store = config_store::Store::Disk(config_store::ConfigFile::open(&path, unsafe {
+            libc::geteuid()
+        })?);
+        store.load()?;
+        store
+    } else {
+        let config = config::merge(
+            &config::defaults(),
+            &Config::from([
+                ("SSID".into(), "RelayForge Demo".into()),
+                ("PASSPHRASE".into(), "demo-only-password".into()),
+                ("WIFI_IFACE".into(), "demo0".into()),
+                ("INTERNET_IFACE".into(), "demo1".into()),
+            ]),
+        )?;
+        config_store::Store::Memory(config)
+    };
     let builder = if demo {
         zbus::connection::Builder::session()?
     } else {
@@ -432,9 +581,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         core: core.clone(),
         clients: clients.clone(),
         worker: worker.clone(),
-        demo_config: Mutex::new(
-            json!({"SSID":"RelayForge Demo","PASSPHRASE":"demo-only-password","BACKEND":"create_ap","WIFI_IFACE":"demo0","INTERNET_IFACE":"demo1"}),
-        ),
+        configuration: Arc::new(Mutex::new(configuration)),
+        operations: tokio::sync::Mutex::new(()),
+        config_users: tokio::sync::RwLock::new(()),
+        demo,
         demo_deny: deny,
         use_polkit,
         demo_generation: std::sync::atomic::AtomicU64::new(0),

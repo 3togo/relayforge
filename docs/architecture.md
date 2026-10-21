@@ -1,6 +1,6 @@
 # Rust service migration
 
-## First milestone
+## Current boundaries
 
 ```text
 unchanged GTK / GNOME Shell / tray controls
@@ -10,6 +10,8 @@ unchanged GTK / GNOME Shell / tray controls
        Rust service + Polkit checks
                   |
    Rust lifecycle and protocol validation
+           /                    \
+ native configuration        native sysfs inventory
                   |
       anonymous stdin/stdout JSON pipes
                   |
@@ -19,11 +21,13 @@ unchanged GTK / GNOME Shell / tray controls
 ```
 
 relayforge-core has no GLib, D-Bus, process or filesystem dependency. It validates
-desktop configuration patches, models explicit sharing intent, preserves Stop
+the complete merged configuration schema, models explicit sharing intent, preserves Stop
 across delayed activation, rejects stale operation completions, and retains the
 last observed active state when cleanup is unknown. SSID/interface status data
-are separate from credential-bearing configuration. Full merged configuration
-validation and atomic persistence remain in the compatibility backend.
+are separate from credential-bearing configuration. Native credential storage
+and atomic persistence live in the Rust service. The core's Unicode-16 character
+classification matches the pinned Python validator; persistence additionally
+requires explicit stored credentials.
 
 relayforge-service owns the existing D-Bus name without replacement or queueing.
 It authorizes protected calls using the bus-assigned unique sender, passes that
@@ -32,6 +36,14 @@ reads are protected because they contain credentials. Status and clients use
 snapshots so backend work cannot block them. A bounded request budget reserves
 capacity for Stop. Configuration is never placed in process arguments or emitted
 in Rust diagnostics.
+
+GetConfig, SetConfig and GetInterfaces are entirely native. Rust forbids these
+requests at the worker boundary. Configuration writes use a transaction gate
+shared with Start/band changes, and an exclusive configuration lock; Start and
+Stop take shared configuration locks so Stop can cancel an in-flight startup.
+Backend changes require both idle Rust state and a fresh legacy ownership/status
+inspection in the backend operation queue. Status/client snapshots remain
+responsive while configuration I/O runs on Tokio's blocking pool.
 
 compat/worker.py loads the pinned engine without registering a public D-Bus
 object. The parent is its sole client. The original GLib operation scheduler
@@ -49,10 +61,12 @@ network operations, ownership journals, recovery and automatic resume policy.
 
 ## Next extraction steps
 
-1. Port the complete merged configuration schema, atomic persistence and secure
-   first-install credential creation into Rust. Differentially test the Python
-   and Rust validators, including default and legacy configuration cases.
-2. Port radio inventory and regulatory preflight into a backend-independent
+1. Completed: merged configuration schema, atomic persistence, secure new-file
+   credential creation, and differential validation. Existing factory-password
+   rotation and legacy interface-repair installer hooks are not implemented;
+   existing files are retained. See [native configuration](native-configuration.md).
+2. Completed: native interface enumeration. Next: radio capabilities and
+   regulatory preflight in a backend-independent
    capability module. Remove the production-backend-to-developer-probe import
    relationship. Do not relax channel restrictions to make a test pass.
 3. Port ownership journals, PID/interface identity checks, timeout/cancellation,

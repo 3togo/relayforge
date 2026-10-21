@@ -116,6 +116,12 @@ impl Worker {
     }
 
     pub async fn call(&self, method: Method, params: Value) -> Reply {
+        if matches!(
+            method,
+            Method::GetConfig | Method::SetConfig | Method::GetInterfaces
+        ) {
+            return Err("Method is implemented natively; worker delegation is forbidden".into());
+        }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
         {
@@ -201,9 +207,9 @@ emit({'ready':1})
 for line in sys.stdin:
     request=json.loads(line)
     method=request['method']
-    if method=='GetConfig':
+    if method=='GetStatus':
         emit({'signal':'StatusChanged','data':{'active':False}})
-        emit({'id':request['id'],'result':{'SSID':'fixture'}})
+        emit({'id':request['id'],'result':{'active':False}})
     elif method=='Start':
         emit({'id':request['id'],'error':'fixture rejection'})
     elif method=='GetCapabilities':
@@ -230,7 +236,7 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         let (sender, mut events) = mpsc::channel(8);
         let worker = Worker::spawn(&root.0, sender).await.unwrap();
         let caller = worker.clone();
-        let task = tokio::spawn(async move { caller.call(Method::GetConfig, Value::Null).await });
+        let task = tokio::spawn(async move { caller.call(Method::GetStatus, Value::Null).await });
         let (event, ack) = timeout(Duration::from_secs(3), events.recv())
             .await
             .unwrap()
@@ -238,7 +244,7 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         assert_eq!(event["signal"], "StatusChanged");
         assert!(!task.is_finished());
         ack.send(()).unwrap();
-        assert_eq!(task.await.unwrap().unwrap()["SSID"], "fixture");
+        assert_eq!(task.await.unwrap().unwrap()["active"], false);
         timeout(Duration::from_secs(3), worker.shutdown())
             .await
             .unwrap()
@@ -271,6 +277,13 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         let root = Fixture::new(false);
         let (sender, _) = mpsc::channel(8);
         let worker = Worker::spawn(&root.0, sender).await.unwrap();
+        for method in [Method::GetConfig, Method::SetConfig, Method::GetInterfaces] {
+            assert!(worker
+                .call(method, Value::Null)
+                .await
+                .unwrap_err()
+                .contains("delegation is forbidden"));
+        }
         assert_eq!(
             worker.call(Method::Start, Value::Null).await.unwrap_err(),
             "Networking worker rejected the operation"

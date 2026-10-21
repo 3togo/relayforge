@@ -100,9 +100,16 @@ def main():
                 emit({'id': request_id, 'error': 'Backend operation rejected'})
 
         params = request.get('params')
-        if method == 'SetConfig':
-            parameters = GLib.Variant('(s)', (json.dumps(params),))
-        elif method == 'SwitchBandAndReconnect':
+        if method == 'GetStatus':
+            def status_finished(value, error):
+                if error:
+                    Invocation().return_error_literal()
+                else:
+                    emit({'id': request_id, 'result': value})
+            if not engine._operations.submit(engine._get_status_dict, status_finished, defer=True):
+                Invocation().return_error_literal()
+            return GLib.SOURCE_REMOVE
+        if method == 'SwitchBandAndReconnect':
             parameters = GLib.Variant('(s)', (params,))
         else:
             parameters = GLib.Variant('()', ())
@@ -111,8 +118,8 @@ def main():
 
     def read():
         try:
-            allowed = {'Start', 'Stop', 'GetStatus', 'GetClients', 'GetConfig', 'SetConfig',
-                       'GetInterfaces', 'GetCapabilities', 'SwitchBandAndReconnect', 'PrepareFirewall'}
+            allowed = {'Start', 'Stop', 'GetStatus', 'GetClients',
+                       'GetCapabilities', 'SwitchBandAndReconnect', 'PrepareFirewall'}
             while True:
                 line = sys.stdin.buffer.readline(LIMIT + 1)
                 if not line:

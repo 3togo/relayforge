@@ -32,8 +32,6 @@ class WifiHotspotDaemon:
                         return json.dumps({{'success':False}})
                     time.sleep(.01)
                 return json.dumps({{'success':True}})
-            if method == 'GetConfig':
-                return json.dumps({{'SSID':'fixture'}})
             return True
         def finished(value, error):
             if error:
@@ -45,6 +43,8 @@ class WifiHotspotDaemon:
         self._emit_signal('StatusChanged',json.dumps({{'active':False,'state':'idle'}}))
         Path(__file__).with_suffix('.trace').write_text('stopped')
         return True
+    def _get_status_dict(self):
+        return {{'active':False,'state':'idle'}}
 '''
 
 
@@ -90,8 +90,13 @@ class WorkerTests(unittest.TestCase):
         self.process.stdin.flush()
 
     def test_private_rpc_preserves_wire_values(self):
-        self.send({'id': 1, 'method': 'GetConfig', 'params': None})
-        self.assertEqual(self.frame(), {'id': 1, 'result': {'SSID': 'fixture'}})
+        self.send({'id': 1, 'method': 'GetStatus', 'params': None})
+        self.assertEqual(self.frame(), {'id': 1, 'result': {'active': False, 'state': 'idle'}})
+
+    def test_configuration_requests_are_removed_from_the_worker_protocol(self):
+        self.send({'id': 1, 'method': 'SetConfig', 'params': {'SSID': 'must-not-write'}})
+        self.assertEqual(self.process.wait(timeout=5), 0)
+        self.assertEqual(self.trace.read_text(), 'stopped')
 
     def test_stop_interrupts_pending_start(self):
         self.send({'id': 1, 'method': 'Start'})
