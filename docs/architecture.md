@@ -10,14 +10,13 @@ unchanged GTK / GNOME Shell / tray controls
        Rust service + Polkit checks
                   |
    Rust lifecycle and protocol validation
-           /                    \
- native configuration        native sysfs inventory
-                  |
-      anonymous stdin/stdout JSON pipes
-                  |
-       pinned Python backend adapter
-                  |
-    create_ap / NetworkManager / kernel
+        |-- native configuration/store
+        |-- native sysfs inventory
+        `-- anonymous stdin/stdout JSON pipes
+                         |
+              pinned Python backend adapter
+                         |
+             create_ap / NetworkManager / kernel
 ```
 
 relayforge-core has no GLib, D-Bus, process or filesystem dependency. It validates

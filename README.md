@@ -17,6 +17,8 @@ Requires Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).
+The latest [validation report](docs/native-configuration-validation.md) records
+the exact implementation revision and remote checks.
 
 ```sh
 cargo build --workspace --all-targets --locked
@@ -46,7 +48,7 @@ Demo mode uses only in-memory settings and fictitious adapters; it never spawns
 the compatibility worker. The reused controls still display their Wi-Fi Relay
 branding. `--demo-deny` tests denied requests; `--demo-polkit` tests the real
 Polkit call path against an authority on the disposable bus. Neither connects to
-the system bus. Standalone mode authorizes callers with the same UID only.
+the system bus. `--demo` and `--demo-config` authorize callers with the same UID only.
 
 To test native persistence without networking, create a new private configuration
 in an existing directory owned by your user, then start a demo using that file:

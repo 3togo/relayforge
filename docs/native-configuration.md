@@ -72,7 +72,7 @@ config_oracle exists solely for these tests and is not a production service
 command. To build it, use cargo build --workspace --all-targets --locked.
 
 Detailed source revision, environment, executed checks and limits are recorded
-in the accompanying validation update. Existing physical Wi-Fi Relay evidence
+in [the validation update](native-configuration-validation.md). Existing physical Wi-Fi Relay evidence
 does not certify this Rust implementation.
 
 ## References
