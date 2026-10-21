@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/relayforge-core", "crates/relayforge-service"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "signal"] }
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }

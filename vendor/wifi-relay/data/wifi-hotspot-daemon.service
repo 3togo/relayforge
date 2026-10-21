@@ -1,0 +1,18 @@
+[Unit]
+Description=Wi-Fi Relay D-Bus Daemon
+After=network.target
+
+[Service]
+Type=dbus
+BusName=io.github.erhanzeyrek.WifiHotspot
+ExecStart=/usr/libexec/wifi-hotspot-daemon/wifi-hotspot-daemon.py
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=wifi-relay
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+TimeoutStopSec=50
+ExecStopPost=/usr/libexec/wifi-hotspot-daemon/nm_backend.py --recover-all
+
+[Install]
+WantedBy=multi-user.target

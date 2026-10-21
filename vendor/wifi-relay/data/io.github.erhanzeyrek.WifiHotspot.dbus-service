@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=io.github.erhanzeyrek.WifiHotspot
+Exec=/usr/libexec/wifi-hotspot-daemon/wifi-hotspot-daemon.py
+User=root
+SystemdService=wifi-hotspot-daemon.service

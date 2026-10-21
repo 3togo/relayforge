@@ -1,0 +1,12 @@
+/* Symbolic icons inherit these colors in both light and dark panel themes. */
+.hotspot-tray-off {
+    color: #9a9996;
+}
+
+.hotspot-tray-connecting {
+    color: #ffbe6f;
+}
+
+.hotspot-tray-on {
+    color: #57e389;
+}

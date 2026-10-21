@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.erhanzeyrek.WifiHotspot</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Wi-Fi Relay</name>
+  <summary>Share Wi-Fi with optional desktop controls</summary>
+  <description>
+    <p>
+      Share your internet connection through a compatible Wi-Fi adapter. Includes standalone
+      settings with optional GNOME Shell and desktop tray controls. Concurrent Wi-Fi reception
+      and hotspot broadcasting require hardware and driver support.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.erhanzeyrek.WifiHotspot.desktop</launchable>
+  <categories>
+    <category>Network</category>
+    <category>Settings</category>
+  </categories>
+  <url type="homepage">https://github.com/3togo/gnome-wifi-hotspot</url>
+  <releases>
+    <release version="1.0.0" date="2026-10-09" type="stable">
+      <description><p>Standalone settings with optional desktop controls, private runtime state, bounded worker supervision, and local Wi-Fi QR images.</p></description>
+    </release>
+  </releases>
+  <developer_name>Erhan Zeyrek</developer_name>
+</component>

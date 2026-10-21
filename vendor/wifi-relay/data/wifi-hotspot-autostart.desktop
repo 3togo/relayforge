@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Relay Tray
+Comment=Start the Wi-Fi Hotspot tray at login
+Exec=wifi-hotspot-enable-extension
+TryExec=wifi-hotspot-enable-extension
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

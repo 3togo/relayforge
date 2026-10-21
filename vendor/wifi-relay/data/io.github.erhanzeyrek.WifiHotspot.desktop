@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Wi-Fi Relay
+Comment=Configure and manage Wi-Fi Hotspot
+Exec=/usr/bin/wifi-hotspot-settings
+Icon=io.github.erhanzeyrek.WifiHotspot
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Network;Settings;
+StartupNotify=true

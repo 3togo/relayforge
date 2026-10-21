@@ -1,0 +1,10 @@
+[Unit]
+Description=Wi-Fi Relay desktop tray controls
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/share/wifi-hotspot/settings/tray.py --session-start
+Restart=on-failure
+RestartSec=3

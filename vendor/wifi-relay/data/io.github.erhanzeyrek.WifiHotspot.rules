@@ -1,0 +1,9 @@
+/* Allow users in wheel or sudo group to manage Wi-Fi Hotspot without password */
+polkit.addRule(function(action, subject) {
+    if (action.id === "io.github.erhanzeyrek.WifiHotspot.manage") {
+        if (subject.local && subject.active &&
+            (subject.isInGroup("wheel") || subject.isInGroup("sudo"))) {
+            return polkit.Result.YES;
+        }
+    }
+});
