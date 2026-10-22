@@ -97,7 +97,7 @@ fn read(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<Option<(Manife
         })
         .transpose()
 }
-fn frozen(p: &Platform, data: &Snapshot) -> Result<Config> {
+pub(super) fn frozen(p: &Platform, data: &Snapshot) -> Result<Config> {
     let marker = Path::new(&data.fields["DAEMON_PIDFILE"]);
     let root = Directory::open(
         marker
@@ -242,6 +242,7 @@ pub(super) async fn configure(p: &Platform, dir: &Directory, values: &[String]) 
         return Err("Daemon owner exited");
     }
     let config = frozen(p, &data)?;
+    radio_plan::check(p, dir, false).await?;
     if values[0] != config["CHANNEL"] || values[1] != config["FREQ_BAND"] || values[2] != "nl80211"
     {
         return Err("Unsupported daemon radio or driver plan");
@@ -591,6 +592,7 @@ pub(super) async fn run(p: &Platform, dir: &Directory) -> Result<()> {
         return Err("Stop must clear the prior daemon session");
     }
     let config = frozen(p, &data)?;
+    radio_plan::check(p, dir, false).await?;
     let rendered = render(&config, &data, &m)?;
     for (name, text) in rendered {
         if m.hashes.get(&name) != Some(&digest(text.as_bytes())) {

@@ -43,6 +43,7 @@ pub struct Capabilities {
 }
 
 pub struct Snapshot {
+    pub phy: u32,
     pub capabilities: Capabilities,
     pub interface_type: String,
 }
@@ -378,6 +379,7 @@ impl Snapshot {
             .get(band)
             .is_some_and(|entries| entries.iter().any(|c| c.frequency == frequency));
         Ok(Self {
+            phy,
             interface_type: kind,
             capabilities: Capabilities {
                 ap_2ghz: !channels["2.4"].is_empty(),

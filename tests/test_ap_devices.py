@@ -251,16 +251,17 @@ class DeviceOwnershipTests(unittest.TestCase):
     def test_generated_creation_adapter_keeps_shell_and_rust_snapshot_in_sync(self):
         import shlex
         from test_ap_runtime import staging,BINARY
+        from test_ap_radio_plan import prepare as radio_prepare
         with bench() as b:
-            before=prepare(b);b.snapshot.unlink()
+            radio_prepare(b);before=read(b);b.snapshot.unlink()
             generated=staging.native_engine((ROOT/'vendor/wifi-relay/daemon/create_ap').read_bytes()).decode()
             functions='save_recovery_state() {'+generated.split('save_recovery_state() {',1)[1].split('HAVEGED_WATCHDOG_PID=',1)[0]
-            start=generated.index('if [[ $NO_VIRT -eq 0 ]]; then\n    if is_wifi_connected ${WIFI_IFACE}; then\n')
+            start=generated.index('"$RUNTIME_HELPER" --create-ap-runtime radio-check "$CONFDIR" || die\n')
             end=generated.index('\nmutex_lock\necho $WIFI_IFACE',start)
             shim=b.root/'fixture-runtime'
             shim.write_text('#!/bin/bash\nshift\nexec '+shlex.quote(str(BINARY))+' --test-ap-runtime '+shlex.quote(str(b.root))+' "$@"\n');shim.chmod(0o700)
             assignments='\n'.join(k+'='+shlex.quote(v) for k,v in b.fields.items())
-            script='set -e\nRUNTIME_HELPER='+shlex.quote(str(shim))+'\n'+assignments+'\nIP_ADDRS=()\nROUTE_ADDRS=()\n'+functions+'\ndie() { exit 1; }\nis_wifi_connected() { return 1; }\nsave_recovery_state\n'+generated[start:end]
+            script='set -e\nRUNTIME_HELPER='+shlex.quote(str(shim))+'\n'+assignments+'\nIP_ADDRS=()\nROUTE_ADDRS=()\n'+functions+'\ndie() { exit 1; }\nsave_recovery_state\n'+generated[start:end]
             for action in ['device-release','interface-configure','interface-remove','device-restore','verify-cleanup']:
                 script+='\n"$RUNTIME_HELPER" --create-ap-runtime '+action+' "$CONFDIR"\n'
             result=subprocess.run(['/bin/bash','-c',script],text=True,capture_output=True,timeout=10)

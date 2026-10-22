@@ -87,9 +87,9 @@ configuration. No AppArmor/SELinux policy was changed by this extraction.
 
 ## Remaining shell and hardware boundary
 
-The generated Bash adapter still parses options, performs compatibility/radio
-checks, manages its instance markers and dispatches Rust transactions. Optional
-module loading remains Bash. Native supervision always supplies --no-haveged;
+The generated Bash adapter still parses options, manages its instance markers
+and dispatches Rust transactions. [Startup radio and driver checks](native-startup-radio.md)
+now run in Rust. Optional PPTP module loading has been removed from native mode. Native supervision always supplies --no-haveged;
 manual native use without it is declined. Bash no longer renders either daemon
 configuration, launches either daemon or polls hostapd readiness.
 

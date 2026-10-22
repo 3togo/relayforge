@@ -89,10 +89,10 @@ journals, recovery and automatic resume policy.
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
    client reports, cancellation and owned recovery. The pinned Bash networking
-   adapter retains option parsing, compatibility checks, instance housekeeping
-   and optional module loading; snapshot/child recovery, firewall transactions,
+   adapter retains option parsing, instance housekeeping and dispatch;
+   snapshot/child recovery, firewall transactions,
    AP creation/setup/teardown, NetworkManager managed-state handling, forwarding,
-   and daemon rendering/launch/readiness are now Rust. See
+   daemon rendering/launch/readiness and startup radio/driver policy are now Rust. See
    [create_ap supervision](native-create-ap.md) and [native recovery](native-recovery.md).
    Compatibility mode remains until
    feature parity is demonstrated. See [firewall extraction](native-firewall.md);

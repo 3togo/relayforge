@@ -326,6 +326,7 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
     def prepare(context):
         state=context.state
         (state/'runtime-bin').symlink_to(BINARY)
+        private(state/'radio-module','test_driver')
         (state/'bin').mkdir(mode=0o700)
         for name in ('hostapd','dnsmasq'):
             shutil.copyfile(CHILD,state/'bin'/name)
@@ -464,6 +465,19 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
                     self.assertEqual(set(json.loads((context.state/'network-state.json').read_text())['interfaces']),{'demo0'})
                     self.assertFalse(list((context.state/'leases').iterdir()))
                     self.assertEqual(len(json.loads((context.state/'firewall-state.json').read_text())['rules']),1)
+
+    def test_native_radio_rejection_reaches_desktop_before_network_mutation(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply
+        with supervised_bench() as context:
+            self.prepare(context);private(context.state/'radio-module','brcmfmac')
+            path=context.state/'network-state.json';before=json.loads(path.read_text())
+            with self.service(context) as (bus,_):
+                self.assertFalse(decode_reply('Start',call(bus,'Start'))['success'])
+                self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                self.assertFalse((context.state/'create-ap.json').exists())
+                self.assertEqual(json.loads(path.read_text()),before)
+                self.assertFalse(list((context.state/'engine').glob('create_ap.demo0.conf.*')))
 
     def test_native_dns_exit_after_readiness_becomes_failed_and_cleans_up(self):
         from test_create_ap import bench as supervised_bench

@@ -55,7 +55,7 @@ class StagingTests(unittest.TestCase):
             self.assertEqual((output/target).read_bytes(),staging.native_engine((ROOT/'vendor/wifi-relay/daemon/create_ap').read_bytes()))
             self.assertEqual(manifest[target]['mode'],'0o755')
             self.assertNotIn('python3',(output/target).read_text())
-            self.assertEqual((output/target).read_text().count('--create-ap-runtime'),20)
+            self.assertEqual((output/target).read_text().count('--create-ap-runtime'),21)
             self.assertNotRegex((output/target).read_text(),r'(?m)^\s*iptables ')
             self.assertNotIn('/proc/sys/net/',(output/target).read_text())
             self.assertIn('interface-configure', (output/target).read_text())
@@ -65,6 +65,9 @@ class StagingTests(unittest.TestCase):
             self.assertIn('device-release', (output/target).read_text())
             self.assertIn('daemons-configure', (output/target).read_text())
             self.assertIn('daemons-run', (output/target).read_text())
+            self.assertIn('radio-check', (output/target).read_text())
+            for forbidden in ('can_transmit_to_channel', 'is_wifi_connected', 'get_adapter_', 'iw reg ', 'iw phy ', 'iwconfig ', 'modprobe ', 'version_cmp()'):
+                self.assertNotIn(forbidden,(output/target).read_text())
             for forbidden in ('cat << EOF > $CONFDIR/hostapd.conf','cat << EOF > $CONFDIR/dnsmasq.conf','dnsmasq -C ', '$HOSTAPD $HOSTAPD_DEBUG_ARGS','wait_for_ap()'):
                 self.assertNotIn(forbidden,(output/target).read_text())
             self.assertTrue(all(not path.endswith('.py') for path in manifest))

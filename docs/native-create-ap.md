@@ -10,8 +10,9 @@ Rust also implements snapshots and child recovery through the
 [native recovery runtime](native-recovery.md). A generated adapter of the pinned
 Bash script delegates recovery, [firewall rules](native-firewall.md),
 [AP setup/forwarding](native-network-state.md),
-[device ownership](native-device-ownership.md), and
-[daemon configuration/launch](native-daemons.md) to Rust. Neither native service mode
+[device ownership](native-device-ownership.md),
+[daemon configuration/launch](native-daemons.md), and
+[startup radio policy](native-startup-radio.md) to Rust. Neither native service mode
 requires a Python backend; the original compatibility mode remains available.
 
 ## Startup and ownership

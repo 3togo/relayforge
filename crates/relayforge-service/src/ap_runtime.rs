@@ -1,6 +1,7 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
 mod daemons;
 mod network;
+mod radio_plan;
 use crate::{
     ap_firewall::{Executor, Plan, Simulator},
     ap_process::{Birth, Handle},
@@ -838,6 +839,10 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
     };
     let dir = p.open(parent, matches!(action, "record-child" | "stop-children"))?;
     match action {
+        "radio-check" if values.is_empty() => {
+            radio_plan::check(p, &dir, true).await?;
+            Ok(String::new())
+        }
         "daemons-configure" if values.len() == 3 => daemons::configure(p, &dir, values).await,
         "daemons-leases" if values.is_empty() => String::from_utf8(daemons::read_leases(p, &dir)?)
             .map_err(|_| "Invalid DNS lease encoding"),

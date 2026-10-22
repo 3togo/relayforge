@@ -189,6 +189,35 @@ def native_engine(source):
     section('# start haveged when needed\n','CHANNEL=default\n','')
     if any(value in text for value in ('cat << EOF > $CONFDIR/hostapd.conf', 'cat << EOF > $CONFDIR/dnsmasq.conf', 'dnsmasq -C ', '$HOSTAPD $HOSTAPD_DEBUG_ARGS', 'wait_for_ap()')):
         raise ValueError('Native adapter retains Bash daemon configuration or launch')
+    # The frozen plan already comes from Rust preflight. Recheck it before any
+    # interface mutation; never let legacy radio heuristics rewrite that plan.
+    section('if [[ $FREQ_BAND_SET != 0 ]]; then\n',
+            'if [[ "$SHARE_METHOD" != "nat" && "$SHARE_METHOD" != "bridge" && "$SHARE_METHOD" != "none" ]]; then\n',
+            'WIFI_IFACE=$1\n'
+            '[[ "$DRIVER" == nl80211 && -z "$COUNTRY" && -z "$NEW_MACADDR" ]] || die "Unsupported native radio override."\n\n')
+    section('if [[ -n "$NEW_MACADDR" ]]; then\n',
+            'if [[ "$SHARE_METHOD" != "none" ]]; then\n    MIN_REQUIRED_ARGS=2\n','')
+    section('if [[ $(get_adapter_kernel_module ${WIFI_IFACE}) =~ ^rtl[0-9].*$ ]]; then\n',
+            'if [[ $NO_VIRT -eq 1 && "$WIFI_IFACE" == "$INTERNET_IFACE" ]]; then\n','')
+    section('if [[ $NO_VIRT -eq 0 ]]; then\n    if is_wifi_connected ${WIFI_IFACE}; then\n',
+            'device_state=$("$RUNTIME_HELPER" --create-ap-runtime interface-create "$CONFDIR") || die\n',
+            '"$RUNTIME_HELPER" --create-ap-runtime radio-check "$CONFDIR" || die\n')
+    section('if [[ -n "$COUNTRY" && $USE_IWCONFIG -eq 0 ]]; then\n',
+            '"$RUNTIME_HELPER" --create-ap-runtime device-release "$CONFDIR" || die\n','')
+    section('version_cmp() {\n','USE_IWCONFIG=0\n','')
+    section('is_wifi_interface() {\n','is_macaddr() {\n','')
+    text=text.replace("#    iwconfig (you only need this if 'iw' can not recognize your adapter)\n",'')
+    section('is_macaddr() {\n','CHANNEL=default\n','')
+    # Optional PPTP helper loading changes global kernel state and is not part
+    # of the supported desktop NAT contract. Kernel dependencies remain managed
+    # by the administrator and normal kernel autoloading.
+    module='        modprobe nf_nat_pptp > /dev/null 2>&1\n'
+    if text.count(module)!=1:
+        raise ValueError('Pinned optional module boundary changed')
+    text=text.replace('        # to enable clients to establish PPTP connections we must\n'
+                      '        # load nf_nat_pptp module\n'+module,'')
+    if any(value in text for value in ('can_transmit_to_channel', 'is_wifi_connected', 'get_adapter_', 'iw reg ', 'iw phy ', 'iwconfig ', 'modprobe ')):
+        raise ValueError('Native adapter retains Bash radio policy or module loading')
     return text.encode('utf-8')
 
 

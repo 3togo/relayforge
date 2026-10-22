@@ -11,6 +11,7 @@ from test_ap_runtime import bench,private,CHILD,staging
 from test_ap_devices import prepare as devices,finish,iface
 from test_ap_network import read,write
 from test_dbus import BINARY,ROOT
+from test_radio import capture
 
 
 def prepare(b,patch=None,configure=True):
@@ -25,6 +26,14 @@ def prepare(b,patch=None,configure=True):
     (b.root/'bin').mkdir(exist_ok=True)
     for name in ['hostapd','dnsmasq']:
         shutil.copyfile(CHILD,b.root/'bin'/name);(b.root/'bin'/name).chmod(0o700)
+    radio=capture()
+    # A connected parent shares the exact frozen channel, with no RF operations.
+    channel=int(config['CHANNEL']);band=config['FREQ_BAND']
+    frequency=(2484 if channel==14 else 2407+5*channel) if band=='2.4' else 5000+5*channel
+    radio['phy']=radio['phy'].replace('* 5180 MHz [36] (20.0 dBm) (no IR)', '* 5180 MHz [36] (20.0 dBm)')
+    radio['link']=f'Connected to aa:bb:cc:dd:ee:ff (on demo0)\n\tSSID: Upstream\n\tfreq: {frequency}\n'
+    private(b.root/'live-radio.json',radio);private(b.root/'radio-module','test_driver')
+    b.invoke('radio-check')
     b.invoke('interface-create');b.invoke('device-release')
     if configure:
         b.invoke('daemons-configure',None,config['CHANNEL'],config['FREQ_BAND'],'nl80211')
