@@ -221,7 +221,7 @@ class CreateApTests(unittest.TestCase):
                 client.close()
 
     def test_changed_or_missing_resource_owner_blocks_recovery_until_restored(self):
-        for change in ('owner','missing'):
+        for change in ('owner','missing','missing-without-pid'):
             with self.subTest(change=change),bench() as context,context.service() as (bus,_):
                 self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
                 context.update(fail_cleanup=True)
@@ -229,8 +229,10 @@ class CreateApTests(unittest.TestCase):
                 snapshot=next((context.state/'engine').glob('*/recovery.json'))
                 original=snapshot.read_bytes()
                 previous_recoveries=sum(e['kind']=='recover-request' for e in context.events())
-                if change=='missing':
+                if change.startswith('missing'):
                     snapshot.unlink()
+                    if change=='missing-without-pid':
+                        (snapshot.parent/'pid').unlink()
                 else:
                     data=json.loads(original)
                     data['owner']['starttime']+='0'

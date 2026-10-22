@@ -485,14 +485,10 @@ impl Backend {
             }
             private_directory(&path, false)?;
             if !path.join("recovery.json").exists() {
-                if let Some(process) = &owned.process {
-                    if private_read(&path.join("pid"), 32, 0o444)?.is_some_and(|b| {
-                        String::from_utf8_lossy(&b).trim() == process.pid.to_string()
-                    }) {
-                        return Err("Owned helper state has no recovery snapshot");
-                    }
-                }
-                continue;
+                // The helper removes its pid file before checking cleanup. An
+                // absent pid therefore cannot prove that this directory is
+                // unrelated or clean when its recovery snapshot is also lost.
+                return Err("Helper state has no recovery snapshot; ownership is unconfirmed");
             }
             let data = recovery(&path)?;
             if data.fields.get("DAEMON_PIDFILE") != Some(&marker) {
