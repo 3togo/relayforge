@@ -32,6 +32,8 @@ hardens cancellation, status publication and inhibitor recovery; its
 [validation report](docs/native-suspend-audit-validation.md) records the tested revision.
 [Native offline deployment](docs/native-deployment.md) now supports installation,
 upgrade, interrupted recovery and rollback in an explicitly selected dormant image.
+Its [validation report](docs/native-deployment-validation.md) records the tested
+revision and the remaining privileged/live-deployment gates.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 

@@ -68,7 +68,7 @@ Polkit policies, and license. A package must contain exactly one complete backen
 manifest: six files for NetworkManager or seven for create_ap. Native helper and
 service copies must be identical. Executable header, size, hash and permissions
 are checked; integration templates must match those embedded in this installer.
-The helper and service are ELF64; target architecture compatibility still needs
+The helper and service are little-endian ELF64; target architecture compatibility still needs
 a deployment/release check. Backend switching is refused for an existing receipt;
 it requires a separate explicit configuration/service migration.
 
