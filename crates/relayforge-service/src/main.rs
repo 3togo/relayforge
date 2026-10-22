@@ -40,6 +40,7 @@ struct Service {
     radio: radio::Source,
     cancellation: tokio::sync::watch::Sender<u64>,
     power: Mutex<power::State>,
+    maintenance: std::sync::atomic::AtomicBool,
     fixture: bool,
     demo: bool,
     demo_deny: bool,
@@ -203,6 +204,19 @@ impl Service {
             && (cancelled_before_queue || *cancelled.borrow() != request_revision)
         {
             return Ok(json!({"success":false,"error":"Startup cancelled while queued"}));
+        }
+        if self.maintenance.load(std::sync::atomic::Ordering::SeqCst)
+            && matches!(
+                method,
+                Method::Start
+                    | Method::SetConfig
+                    | Method::SwitchBandAndReconnect
+                    | Method::PrepareFirewall
+            )
+        {
+            return Err(fdo::Error::Failed(
+                "Service deployment is in progress; retry after handover".into(),
+            ));
         }
         if self.native.is_some() {
             if method == Method::Start && self.power.lock().unwrap().blocked() {
@@ -676,6 +690,16 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--deployment-protocol"] {
+        println!("{}", deployment::live::PROTOCOL);
+        return Ok(());
+    }
+    if let Some(mode @ ("--deploy-live" | "--test-deploy-live")) = args.first().map(String::as_str)
+    {
+        return deployment::live::run(&args[1..], mode == "--test-deploy-live")
+            .await
+            .map_err(Into::into);
+    }
     if let Some(mode @ ("--deploy" | "--test-deploy")) = args.first().map(String::as_str) {
         return deployment::run(&args[1..], mode == "--test-deploy").map_err(Into::into);
     }
@@ -771,6 +795,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [mode] if mode=="--native-networkmanager" => (false,false,true,None,Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
         [mode,_capture,path,_state] if mode=="--test-networkmanager" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode] if mode=="--demo" => (true,false,false,None,None),
+        [mode] if mode=="--demo-maintenance" => (true,false,false,None,None),
         [mode] if mode=="--demo-deny" => (true,true,false,None,None),
         [mode] if mode=="--demo-polkit" => (true,false,true,None,None),
         [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
@@ -933,6 +958,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         radio,
         cancellation: cancellation.clone(),
         power: Mutex::new(power::State::default()),
+        maintenance: std::sync::atomic::AtomicBool::new(
+            args.first().map(String::as_str) == Some("--demo-maintenance")
+                || !demo
+                    && match std::fs::symlink_metadata("/var/lib/relayforge-deploy/live.json") {
+                        Ok(_) => true,
+                        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                    },
+        ),
         fixture,
         demo,
         demo_deny: deny,
@@ -948,6 +981,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     connection.object_server().at(OBJECT_PATH, service).await?;
+    connection
+        .object_server()
+        .at(
+            deployment::live::GATE_PATH,
+            deployment::live::Gate {
+                uid: if demo { unsafe { libc::geteuid() } } else { 0 },
+            },
+        )
+        .await?;
     connection
         .object_server()
         .remove::<Initializing, _>(OBJECT_PATH)

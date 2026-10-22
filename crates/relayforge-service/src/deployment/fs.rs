@@ -1,4 +1,4 @@
-//! Descriptor-relative offline image access. No symlinks, mounts or special files.
+//! Descriptor-relative access. Offline images also refuse mount crossings.
 use super::Result;
 use crate::config_store::random_secret;
 use std::{
@@ -15,6 +15,7 @@ use std::{
 pub(super) struct Root {
     pub file: File,
     pub uid: u32,
+    offline: bool,
 }
 pub(super) struct Data {
     pub bytes: Vec<u8>,
@@ -30,12 +31,16 @@ struct How {
 fn name(value: &str) -> Result<CString> {
     CString::new(value).map_err(|_| "Invalid image path")
 }
-fn open(dir: &File, value: &str, flags: i32, mode: u32) -> Result<Option<File>> {
+fn open(dir: &File, value: &str, flags: i32, mode: u32, offline: bool) -> Result<Option<File>> {
     let value = name(value)?;
     let how = How {
         flags: (flags | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK) as u64,
         mode: u64::from(mode),
-        resolve: 0x01 | 0x04 | 0x08,
+        resolve: if offline {
+            0x01 | 0x04 | 0x08
+        } else {
+            0x04 | 0x08
+        },
     };
     // SAFETY: stable Linux openat2 UAPI; all pointers live across the syscall.
     let fd = unsafe {
@@ -60,6 +65,21 @@ fn sync(dir: &File) -> Result<()> {
     dir.sync_all().map_err(|_| "Cannot sync offline directory")
 }
 impl Root {
+    pub fn live() -> Result<Self> {
+        if unsafe { libc::geteuid() } != 0 {
+            return Err("Live deployment requires root");
+        }
+        let file = File::open("/").map_err(|_| "Cannot open live root")?;
+        let meta = file.metadata().map_err(|_| "Cannot inspect live root")?;
+        if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+            return Err("Unsafe live root");
+        }
+        Ok(Self {
+            file,
+            uid: 0,
+            offline: false,
+        })
+    }
     pub fn open(path: &Path, uid: u32) -> Result<Self> {
         if !path.is_absolute()
             || path
@@ -117,6 +137,7 @@ impl Root {
         Ok(Self {
             file: directory,
             uid,
+            offline: true,
         })
     }
     pub fn identity(&self) -> Result<(u64, u64)> {
@@ -138,7 +159,13 @@ impl Root {
             if part.is_empty() || part == "." || part == ".." {
                 return Err("Invalid relative image path");
             }
-            let next = match open(&directory, part, libc::O_RDONLY | libc::O_DIRECTORY, 0)? {
+            let next = match open(
+                &directory,
+                part,
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+                self.offline,
+            )? {
                 Some(next) => next,
                 None if create => {
                     let part = name(part)?;
@@ -151,6 +178,7 @@ impl Root {
                         part.to_str().map_err(|_| "Invalid directory name")?,
                         libc::O_RDONLY | libc::O_DIRECTORY,
                         0,
+                        self.offline,
                     )?
                     .ok_or("Created directory disappeared")?;
                     created
@@ -182,7 +210,7 @@ impl Root {
         let Some((parent, file)) = self.parent(path, false)? else {
             return Ok(None);
         };
-        let Some(mut handle) = open(&parent, &file, libc::O_RDONLY, 0)? else {
+        let Some(mut handle) = open(&parent, &file, libc::O_RDONLY, 0, self.offline)? else {
             return Ok(None);
         };
         let m = handle
@@ -222,6 +250,7 @@ impl Root {
             &temporary,
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
             0o600,
+            self.offline,
         )?
         .ok_or("Cannot create transaction temporary")?;
         let temp = name(&temporary)?;
@@ -273,7 +302,7 @@ impl Root {
         let Some((parent, file)) = self.parent(path, false)? else {
             return Ok(());
         };
-        if let Some(handle) = open(&parent, &file, libc::O_RDONLY, 0)? {
+        if let Some(handle) = open(&parent, &file, libc::O_RDONLY, 0, self.offline)? {
             handle
                 .sync_all()
                 .map_err(|_| "Cannot sync recovered deployment file")?;
@@ -282,8 +311,14 @@ impl Root {
     }
     pub fn lock(&self, path: &str) -> Result<File> {
         let (parent, file) = self.parent(path, true)?.ok_or("Missing lock parent")?;
-        let handle = open(&parent, &file, libc::O_RDWR | libc::O_CREAT, 0o600)?
-            .ok_or("Cannot open deployment lock")?;
+        let handle = open(
+            &parent,
+            &file,
+            libc::O_RDWR | libc::O_CREAT,
+            0o600,
+            self.offline,
+        )?
+        .ok_or("Cannot open deployment lock")?;
         let m = handle
             .metadata()
             .map_err(|_| "Cannot inspect deployment lock")?;

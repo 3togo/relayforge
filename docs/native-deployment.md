@@ -6,8 +6,9 @@ it with durable before/after receipts, and restores the preceding files on
 rollback. It does not execute installed code, contact a bus, run systemctl, enable
 units, reload policy or activate sharing. The live `/` root is refused.
 
-This is the filesystem deployment phase. Live service handover, package-manager
-integration, release signatures and physical activation remain separate work.
+This is the filesystem deployment phase. [Live service handover](native-live-deployment.md)
+has a separate explicit entry point; this offline command never contacts services.
+Package-manager integration, release signatures and physical activation remain separate work.
 The existing GTK, tray and extension files are outside its managed paths and
 remain unchanged. Public D-Bus identifiers, signatures and policy are retained.
 

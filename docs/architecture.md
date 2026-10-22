@@ -131,5 +131,7 @@ and remaining hardware/deployment and feature-parity gates.
 ## Offline deployment
 
 [Native deployment](native-deployment.md) now provides validated image installation,
-upgrade, journaled recovery and file rollback. Live service handover, distribution
-packaging, activation/authorization and physical upgrade/rollback remain gates.
+upgrade, journaled recovery and file rollback. [Live handover](native-live-deployment.md)
+now adds explicit idle-service maintenance, systemd exclusion, reload/startup
+verification and journaled recovery. Distribution integration, real host
+activation/authorization and physical upgrade/rollback remain gates.

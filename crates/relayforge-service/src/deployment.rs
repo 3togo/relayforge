@@ -1,5 +1,6 @@
-//! Offline native payload transactions. Never executes an installed program or contacts a bus.
+//! Native payload transactions. The offline entry point never contacts services.
 mod fs;
+pub(crate) mod live;
 use crate::config_store::random_secret;
 use fs::{Data, Root};
 use serde::{Deserialize, Serialize};
@@ -60,13 +61,13 @@ impl Entry {
     }
 }
 type Files = BTreeMap<String, Option<Entry>>;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
     id: String,
     files: Files,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct State {
     version: u32,
@@ -167,6 +168,30 @@ struct Payload {
     files: Files,
     blobs: BTreeMap<String, Vec<u8>>,
 }
+fn integration(path: &str, backend: &str) -> Option<&'static [u8]> {
+    match path {
+        NM_UNIT => Some(include_bytes!(
+            "../../../packaging/relayforge-native.service"
+        )),
+        AP_UNIT => Some(include_bytes!(
+            "../../../packaging/relayforge-create-ap.service"
+        )),
+        ACTIVATION => Some(if backend == "create_ap" {
+            include_bytes!("../../../packaging/create-ap-dbus.service").as_slice()
+        } else {
+            include_bytes!("../../../packaging/io.github.erhanzeyrek.WifiHotspot.service")
+                .as_slice()
+        }),
+        POLICY => Some(include_bytes!(
+            "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.conf"
+        )),
+        POLKIT => Some(include_bytes!(
+            "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.policy"
+        )),
+        LICENSE => Some(include_bytes!("../../../LICENSE")),
+        _ => None,
+    }
+}
 fn payload(path: &Path, uid: u32) -> Result<Payload> {
     let root = Root::open(path, uid)?;
     let manifest = root
@@ -207,28 +232,7 @@ fn payload(path: &Path, uid: u32) -> Result<Payload> {
         if data.mode != mode || digest(&data.bytes) != expected.sha256 {
             return Err("Payload bytes or mode differ from manifest");
         }
-        let template: Option<&[u8]> = match path.as_str() {
-            NM_UNIT => Some(include_bytes!(
-                "../../../packaging/relayforge-native.service"
-            )),
-            AP_UNIT => Some(include_bytes!(
-                "../../../packaging/relayforge-create-ap.service"
-            )),
-            ACTIVATION => Some(if backend == "create_ap" {
-                include_bytes!("../../../packaging/create-ap-dbus.service").as_slice()
-            } else {
-                include_bytes!("../../../packaging/io.github.erhanzeyrek.WifiHotspot.service")
-                    .as_slice()
-            }),
-            POLICY => Some(include_bytes!(
-                "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.conf"
-            )),
-            POLKIT => Some(include_bytes!(
-                "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.policy"
-            )),
-            LICENSE => Some(include_bytes!("../../../LICENSE")),
-            _ => None,
-        };
+        let template = integration(&path, backend);
         if template.is_some_and(|template| template != data.bytes) {
             return Err("Payload integration files differ from reviewed templates");
         }
@@ -431,6 +435,9 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
         return Err("Invalid deployment action or payload option");
     }
     let root = Root::open(Path::new(path), uid)?;
+    if root.read(live::RECORD, 65536)?.is_some() {
+        return Err("Pending live handover requires --deploy-live recovery");
+    }
     let payload = source
         .map(|path| payload(Path::new(path), uid))
         .transpose()?;
