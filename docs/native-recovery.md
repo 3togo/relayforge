@@ -1,5 +1,10 @@
 # Native create_ap recovery runtime
 
+The [Rust instance runner](native-instance.md) now replaces the generated Bash
+adapter described in this extraction's provenance section. New staging ships an
+ELF helper at the same path; the historical generator remains for protocol tests.
+
+
 The native create_ap payload now uses Rust for snapshots and child recovery as
 well as supervision. It contains no Python backend or recovery helper. The
 existing GTK, GNOME Shell and tray controls keep the same D-Bus contract; the

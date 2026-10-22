@@ -52,24 +52,10 @@ class StagingTests(unittest.TestCase):
             manifest=staging.stage(binary,output,'create_ap')
             self.assertEqual(len(manifest),7)
             target='usr/lib/relayforge/native/create_ap'
-            self.assertEqual((output/target).read_bytes(),staging.native_engine((ROOT/'vendor/wifi-relay/daemon/create_ap').read_bytes()))
+            self.assertEqual((output/target).read_bytes(),binary.read_bytes())
+            self.assertTrue((output/target).read_bytes().startswith(b'\x7fELF'))
             self.assertEqual(manifest[target]['mode'],'0o755')
-            self.assertNotIn('python3',(output/target).read_text())
-            self.assertEqual((output/target).read_text().count('--create-ap-runtime'),21)
-            self.assertNotRegex((output/target).read_text(),r'(?m)^\s*iptables ')
-            self.assertNotIn('/proc/sys/net/',(output/target).read_text())
-            self.assertIn('interface-configure', (output/target).read_text())
-            self.assertIn('forwarding-release', (output/target).read_text())
-            for forbidden in ('networkmanager_', 'alloc_new_iface', 'dealloc_iface', 'interface add', 'NetworkManager.conf'):
-                self.assertNotIn(forbidden,(output/target).read_text())
-            self.assertIn('device-release', (output/target).read_text())
-            self.assertIn('daemons-configure', (output/target).read_text())
-            self.assertIn('daemons-run', (output/target).read_text())
-            self.assertIn('radio-check', (output/target).read_text())
-            for forbidden in ('can_transmit_to_channel', 'is_wifi_connected', 'get_adapter_', 'iw reg ', 'iw phy ', 'iwconfig ', 'modprobe ', 'version_cmp()'):
-                self.assertNotIn(forbidden,(output/target).read_text())
-            for forbidden in ('cat << EOF > $CONFDIR/hostapd.conf','cat << EOF > $CONFDIR/dnsmasq.conf','dnsmasq -C ', '$HOSTAPD $HOSTAPD_DEBUG_ARGS','wait_for_ap()'):
-                self.assertNotIn(forbidden,(output/target).read_text())
+            self.assertEqual(manifest[target]['sha256'],manifest['usr/lib/relayforge/relayforge-service']['sha256'])
             self.assertTrue(all(not path.endswith('.py') for path in manifest))
             self.assertTrue(all('worker' not in path and 'wifi-hotspot-daemon.py' not in path for path in manifest))
             unit=(output/'usr/lib/systemd/system/relayforge-create-ap.service').read_text()

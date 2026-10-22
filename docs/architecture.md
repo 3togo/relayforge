@@ -14,7 +14,7 @@ unchanged GTK / GNOME Shell / tray controls
         |-- native sysfs inventory
         |-- native radio parsing / startup preflight
         |-- opt-in native NetworkManager controller / ownership journal
-        |-- opt-in Rust create_ap supervisor / gated Bash helper / recovery journal
+        |-- opt-in Rust create_ap supervisor / gated Rust instance helper / recovery journal
         `-- anonymous stdin/stdout JSON pipes
                          |
               pinned Python backend adapter
@@ -88,8 +88,8 @@ journals, recovery and automatic resume policy.
    Rust-controlled iw helpers are covered by simulated fault tests. These tests
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
-   client reports, cancellation and owned recovery. The pinned Bash networking
-   adapter retains option parsing, instance housekeeping and dispatch;
+   client reports, cancellation and owned recovery. The Rust instance helper now
+   owns options, publication, locking, markers, signals and housekeeping;
    snapshot/child recovery, firewall transactions,
    AP creation/setup/teardown, NetworkManager managed-state handling, forwarding,
    daemon rendering/launch/readiness and startup radio/driver policy are now Rust. See

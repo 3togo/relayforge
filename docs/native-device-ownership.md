@@ -69,9 +69,10 @@ cleanup before upgrading an active installation.
 
 ## Remaining boundary
 
-Bash still parses create_ap options, runs compatibility checks, manages instance
-markers and loads optional modules. [Rust daemon supervision](native-daemons.md)
-now renders hostapd/dnsmasq configuration and launches their foreground processes. The native generated adapter
+The [Rust instance runner](native-instance.md) now parses options, manages instance
+markers and dispatches transactions. New native staging contains an ELF helper;
+optional module loading is removed. [Rust daemon supervision](native-daemons.md)
+now renders hostapd/dnsmasq configuration and launches their foreground processes. The native runtime
 has no Bash allocation functions, unmanaged-device helpers, nmcli calls,
 interface-add commands, networking sysctl accesses or direct iptables commands.
 It stages seven payload files without changing system activation.

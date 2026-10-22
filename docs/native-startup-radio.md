@@ -1,7 +1,7 @@
 # Native create_ap startup radio policy
 
-The generated native adapter delegates its remaining radio capability, station
-channel and driver decisions to Rust. The original Bash vendor snapshot and
+The native instance runtime delegates radio capability, station channel and
+driver decisions to Rust. The original Bash vendor snapshot and
 compatibility backend are unchanged. Desktop D-Bus methods, signals, replies and
 authorization remain unchanged.
 
@@ -41,11 +41,10 @@ schema are declined. Optional `nf_nat_pptp` loading has been removed: native NAT
 does not promise PPTP helper behavior, and administrators retain responsibility
 for optional kernel modules. No module-loading replacement runs in Rust.
 
-Bash still owns option parsing, config-file loading, shared locking, instance
-markers, stop/recovery dispatch and filesystem housekeeping. Native networking
-transactions and daemon children are Rust-owned; removing the adapter entirely
-requires migrating this remaining lifecycle protocol. Staging still includes
-the generated adapter and never installs or activates a service.
+The [Rust instance runner](native-instance.md) now also owns option parsing,
+config-file loading, instance markers, stop/recovery dispatch and filesystem
+housekeeping. The generated Bash adapter is retained only as a development
+reference; new staging includes an ELF helper and never activates a service.
 
 Offline captures cover plan restrictions, driver refusals, roaming, parent/PHY
 changes, unsafe files, dead owners and interrupted startup. Private-bus tests

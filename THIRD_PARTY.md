@@ -21,7 +21,9 @@ Native configuration validation uses unicode-general-category 1.1.0
 reference validator's printable-character semantics without a Python runtime
 dependency in the Rust schema.
 
-The native create_ap payload derives its Bash adapter from the pinned BSD-2-Clause
-script. Staging changes the recovery-helper location and delegates recovery and firewall
-operations to Rust. The original source and notices remain in the vendor tree;
-all transformations are checked against the pinned source hash and layout.
+The historical native Bash adapter generator remains in tools/stage-native.py
+for protocol/parity tests. It derives an adapter from the pinned BSD-2-Clause
+script, checking the source hash and transformation boundaries. The original
+source and notices remain in the vendor tree. New native staging copies only
+the Rust ELF service/helper and policy files; it no longer ships a derived Bash
+script. Compatibility mode retains the original vendor backend and its notices.

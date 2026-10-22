@@ -1,5 +1,6 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
 mod daemons;
+mod instance_runtime;
 mod network;
 mod radio_plan;
 use crate::{
@@ -549,15 +550,35 @@ struct Interface {
     ifindex: u32,
     mac: String,
 }
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DirectoryIdentity {
+    device: u64,
+    inode: u64,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    directory: Option<DirectoryIdentity>,
     owner: Identity,
     fields: BTreeMap<String, String>,
     arrays: BTreeMap<String, Vec<String>>,
     interfaces: BTreeMap<String, Interface>,
 }
 impl Snapshot {
+    fn bind_directory(&self, dir: &Directory) -> Result<()> {
+        if let Some(expected) = &self.directory {
+            let meta = dir
+                .fd
+                .metadata()
+                .map_err(|_| "Cannot inspect instance directory identity")?;
+            if meta.dev() != expected.device || meta.ino() != expected.inode {
+                return Err("Instance directory identity changed; refusing recovery");
+            }
+        }
+        Ok(())
+    }
     fn validate(&self, p: &Platform, path: &Path) -> Result<()> {
         self.owner.validate()?;
         if self.fields.keys().any(|k| !FIELDS.contains(&k.as_str()))
@@ -697,6 +718,7 @@ fn snapshot(p: &Platform, dir: &Directory) -> Result<(Snapshot, Vec<u8>)> {
     let data: Snapshot =
         serde_json::from_slice(&bytes).map_err(|_| "Invalid recovery snapshot JSON")?;
     data.validate(p, &dir.path)?;
+    data.bind_directory(dir)?;
     Ok((data, bytes))
 }
 fn pid(dir: &Directory, stem: &str) -> Result<Option<u32>> {
@@ -864,6 +886,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             let owner = observed.identity;
             let previous = dir.read("recovery.json", true, LIMIT)?;
             let mut data = Snapshot {
+                directory: None,
                 owner,
                 fields: BTreeMap::new(),
                 arrays: ARRAYS.iter().map(|k| (k.to_string(), Vec::new())).collect(),
@@ -873,6 +896,8 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                 let old: Snapshot =
                     serde_json::from_slice(bytes).map_err(|_| "Invalid prior recovery snapshot")?;
                 old.validate(p, parent)?;
+                old.bind_directory(&dir)?;
+                data.directory = old.directory.clone();
                 if old.owner != data.owner {
                     return Err("Recovery snapshot owner changed");
                 }
@@ -1073,6 +1098,16 @@ pub(crate) fn daemon_leases(path: &Path, fixture: Option<&Path>) -> Result<Vec<u
     let platform = Platform::new(fixture)?;
     let dir = platform.open(path, false)?;
     daemons::read_leases(&platform, &dir)
+}
+
+pub async fn run_instance(args: &[String], fixture: bool) -> Result<()> {
+    let (platform, args) = if fixture {
+        let (root, args) = args.split_first().ok_or("Missing fixture root")?;
+        (Platform::new(Some(Path::new(root)))?, args)
+    } else {
+        (Platform::new(None)?, args)
+    };
+    instance_runtime::run(&platform, args).await
 }
 
 #[cfg(test)]

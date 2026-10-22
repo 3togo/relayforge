@@ -1,4 +1,4 @@
-//! Native create_ap supervision. The generated Bash adapter retains network transactions.
+//! Native create_ap supervision, with gated Rust instance processes.
 use crate::{
     ap_process::{self, Birth, Handle},
     config_store::random_secret,
@@ -100,14 +100,30 @@ impl Owned {
             self.channel.to_string(),
         ]
     }
-    fn allowed(&self, root: &Path) -> Vec<(String, Vec<String>)> {
+    fn allowed(&self, root: &Path, fixture: bool) -> Vec<(String, Vec<String>)> {
         let bash = fs::canonicalize("/bin/bash")
             .unwrap_or_else(|_| PathBuf::from("/usr/bin/bash"))
             .to_string_lossy()
             .into_owned();
         let mut args = vec![bash.clone()];
         args.extend(self.args(root));
-        vec![(self.runner.clone(), self.gate_args(root)), (bash, args)]
+        let mut native = vec![self.helper.clone(), "--create-ap-instance".into()];
+        native.extend(self.args(root).into_iter().skip(1));
+        let mut allowed = vec![
+            (self.runner.clone(), self.gate_args(root)),
+            (bash, args),
+            (self.helper.clone(), native),
+        ];
+        if fixture {
+            let mut test_args = vec![
+                root.join("runtime-bin").to_string_lossy().into_owned(),
+                "--test-ap-instance".into(),
+                root.to_string_lossy().into_owned(),
+            ];
+            test_args.extend(self.args(root).into_iter().skip(1));
+            allowed.push((self.runner.clone(), test_args));
+        }
+        allowed
     }
 }
 /// The child cannot exec the network helper until the parent durably records its birth.
@@ -133,12 +149,19 @@ pub fn exec_gate(args: &[String]) -> std::result::Result<(), Box<dyn std::error:
     if !["2.4", "5"].contains(&owned.band.as_str()) || !(1..=196).contains(&owned.channel) {
         return Err("Invalid create_ap radio plan".into());
     }
-    let bash = fs::canonicalize("/bin/bash")?;
     unsafe {
         libc::umask(0o077);
     }
-    let error = std::process::Command::new(bash)
-        .arg(&owned.helper)
+    let mut command = if elf(Path::new(&owned.helper))? {
+        let mut command = std::process::Command::new(&owned.helper);
+        command.arg("--create-ap-instance");
+        command
+    } else {
+        let mut command = std::process::Command::new(fs::canonicalize("/bin/bash")?);
+        command.arg(&owned.helper);
+        command
+    };
+    let error = command
         .args([
             "--config",
             &args[2],
@@ -367,13 +390,25 @@ fn private_directory(path: &Path, exact: bool) -> Result<()> {
     }
     Ok(())
 }
+fn elf(path: &Path) -> Result<bool> {
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .map_err(|_| "Cannot inspect helper executable format")?;
+    Ok(&magic == b"\x7fELF")
+}
 async fn run_helper(
     program: &str,
     args: &[&str],
     platform: &Platform,
     seconds: u64,
 ) -> Result<String> {
-    let mut arguments = vec![program];
+    let native = elf(Path::new(program))?;
+    let mut arguments = if native {
+        vec!["--create-ap-instance"]
+    } else {
+        vec![program]
+    };
     arguments.extend_from_slice(args);
     let mut environment = std::collections::BTreeMap::from([
         (
@@ -392,7 +427,11 @@ async fn run_helper(
         );
     }
     radio::command_env(
-        Path::new("/bin/bash"),
+        if native {
+            Path::new(program)
+        } else {
+            Path::new("/bin/bash")
+        },
         &arguments,
         Duration::from_secs(seconds),
         Some(&environment),
@@ -514,7 +553,7 @@ impl Backend {
         }
         if let Some(birth) = &owned.process {
             if let Some(handle) = Handle::open(birth)? {
-                let allowed = owned.allowed(&self.platform.runtime);
+                let allowed = owned.allowed(&self.platform.runtime, self.platform.fixture);
                 handle.signal(libc::SIGUSR1, &allowed)?;
                 let deadline = Instant::now()
                     + Duration::from_millis(if self.platform.fixture { 350 } else { 30000 });
@@ -612,7 +651,11 @@ impl Backend {
             .as_ref()
             .ok_or("Missing helper birth record")?;
         let handle = Handle::open(birth)?.ok_or("create_ap exited")?;
-        if !handle.verify(&session.owned.allowed(&self.platform.runtime))? {
+        if !handle.verify(
+            &session
+                .owned
+                .allowed(&self.platform.runtime, self.platform.fixture),
+        )? {
             return Err("create_ap exited");
         }
         let ready = self

@@ -52,7 +52,7 @@ Closing stdout/stderr is allowed; excessive output is a failure.
 
 Readiness requires a live owner and children, matching AP identities and an exact
 hostapd_cli `state=ENABLED` response. Only Rust writes the existing readiness
-acknowledgement, with the original Bash owner PID. The outer native supervisor
+acknowledgement, with the original instance owner PID. The outer native supervisor
 still verifies channel and upstream identity before reporting Start success.
 A daemon exit, missing owner or interface drift ends the runner and triggers
 owned cleanup. There is no automatic daemon restart or upstream reconnection.
@@ -85,13 +85,14 @@ Mandatory access control stays enforced. Distribution policy may need an
 administrator-reviewed grant for the new lease location and private daemon
 configuration. No AppArmor/SELinux policy was changed by this extraction.
 
-## Remaining shell and hardware boundary
+## Instance and hardware boundary
 
-The generated Bash adapter still parses options, manages its instance markers
-and dispatches Rust transactions. [Startup radio and driver checks](native-startup-radio.md)
-now run in Rust. Optional PPTP module loading has been removed from native mode. Native supervision always supplies --no-haveged;
-manual native use without it is declined. Bash no longer renders either daemon
-configuration, launches either daemon or polls hostapd readiness.
+The [Rust instance runner](native-instance.md) now parses options, manages its
+instance markers and dispatches Rust transactions. [Startup radio and driver
+checks](native-startup-radio.md) also run in Rust. Optional PPTP module loading
+has been removed from native mode. Native supervision always supplies
+--no-haveged; manual native use without it is declined. New native payloads
+contain no Bash backend.
 
 Fixtures execute disposable Rust child binaries, private kernel/NetworkManager
 state and the unchanged desktop client. They cover rendered settings, disabled

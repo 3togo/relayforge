@@ -7,8 +7,8 @@ The GTK settings, GNOME Shell extension and tray client need no changes. The
 Python D-Bus/GLib worker is never constructed in this mode.
 
 Rust also implements snapshots and child recovery through the
-[native recovery runtime](native-recovery.md). A generated adapter of the pinned
-Bash script delegates recovery, [firewall rules](native-firewall.md),
+[native recovery runtime](native-recovery.md). The [Rust instance runner](native-instance.md)
+handles options and housekeeping, dispatching recovery, [firewall rules](native-firewall.md),
 [AP setup/forwarding](native-network-state.md),
 [device ownership](native-device-ownership.md),
 [daemon configuration/launch](native-daemons.md), and
@@ -23,7 +23,7 @@ plan requiring an upstream band switch is rejected. COUNTRY overrides are also
 rejected, so this mode does not deliberately change regulatory settings. Bridge
 mode is declined because it reconfigures the upstream interface. It
 never asks NetworkManager to reconnect the upstream. These checks cannot promise
-that an unvalidated driver or the shell engine will preserve connectivity on
+that an unvalidated driver will preserve connectivity on
 physical hardware; activation remains a separate hardware gate.
 
 Rust freezes configuration into a random, mode-0600 file under the private
@@ -32,8 +32,8 @@ in argv, ownership JSON or returned helper diagnostics. Raw helper output is
 drained with a size limit and discarded. Rust writes a synced intent journal,
 launches a gated child in a separate process group, records its PID, boot ID and
 kernel start time, then acknowledges execution through an anonymous pipe. A
-parent crash before acknowledgement cannot launch the networking helper. Bash
-runs in the foreground using create_ap's existing daemon acknowledgement path.
+parent crash before acknowledgement cannot launch the networking helper. The Rust
+instance runs in the foreground and retains the existing readiness acknowledgement.
 
 Readiness requires the exact PID acknowledgement, a live child with the expected
 executable and arguments, one owned recovery snapshot, the recorded AP interface
@@ -89,10 +89,11 @@ python3 tools/stage-native.py --backend create_ap \
 
 The fresh output directory contains seven payload files plus a hash/mode
 manifest: the Rust binary, alternative systemd unit and D-Bus activation file,
-original bus and Polkit policies, license and generated native Bash adapter. It
+original bus and Polkit policies, license and a second regular ELF at the existing
+`native/create_ap` helper path. The two ELF files have identical bytes. It
 excludes the Python supervisor/worker, credentials, configuration and desktop
-replacements. The source vendor files retain their original hashes; staging
-applies the reviewed recovery, firewall and network transaction transformations. Staging never installs
+replacements. The source vendor files retain their original hashes; the historical
+Bash adapter generator remains only as a development protocol/parity reference. Staging never installs
 files, enables services or reloads D-Bus.
 
 The systemd unit conflicts with both the compatibility service and native
@@ -106,8 +107,9 @@ for this migration.
 ## Validation boundary
 
 `--test-create-ap CAPTURE CONFIG STATE_DIR HELPER` is an internal ordinary-user
-mode on a private session bus. A Bash simulator writes only into a temporary
-directory; radio observations and resource snapshots are simulated. It exercises
+mode on a private session bus. Historical Bash fixtures remain covered; the new
+lifecycle fixture executes the Rust instance runner against temporary network
+state and disposable daemon children. It exercises
 real process creation, execution gating, pidfds, signals, cancellation, deadlines,
 output bounds, recovery and the unmodified asynchronous desktop client.
 

@@ -17,7 +17,7 @@ PAYLOAD={
 
 
 def native_engine(source):
-    """Derive the native adapter while preserving the audited vendor snapshot."""
+    """Historical Bash protocol/parity reference; never included in new payloads."""
     expected=json.loads((ROOT/'vendor/manifest.json').read_text())['files']['daemon/create_ap']
     if hashlib.sha256(source).hexdigest()!=expected:
         raise ValueError('Native adapter source differs from the pinned vendor manifest')
@@ -230,7 +230,7 @@ def stage(binary, output, backend='networkmanager'):
     payload['usr/lib/systemd/system/'+unit]=ROOT/'packaging'/unit
     payload['usr/share/dbus-1/system-services/io.github.erhanzeyrek.WifiHotspot.service']=ROOT/'packaging'/activation
     if backend=='create_ap':
-        payload['usr/lib/relayforge/native/create_ap']=ROOT/'vendor/wifi-relay/daemon/create_ap'
+        payload['usr/lib/relayforge/native/create_ap']=Path(binary)
     binary=Path(binary)
     output=Path(output)
     info=binary.lstat()
@@ -247,10 +247,7 @@ def stage(binary, output, backend='networkmanager'):
         for target,source in {'usr/lib/relayforge/relayforge-service':binary,**payload}.items():
             destination=output/target
             destination.parent.mkdir(parents=True,exist_ok=True)
-            if target=='usr/lib/relayforge/native/create_ap':
-                destination.write_bytes(native_engine(source.read_bytes()))
-            else:
-                shutil.copyfile(source,destination)
+            shutil.copyfile(source,destination)
             destination.chmod(0o755 if target.endswith(('/relayforge-service','/create_ap')) else 0o644)
             manifest[target]={'sha256':hashlib.sha256(destination.read_bytes()).hexdigest(),
                               'mode':oct(stat.S_IMODE(destination.stat().st_mode))}

@@ -573,6 +573,13 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(mode @ ("--create-ap-instance" | "--test-ap-instance")) =
+        args.first().map(String::as_str)
+    {
+        return ap_runtime::run_instance(&args[1..], mode == "--test-ap-instance")
+            .await
+            .map_err(Into::into);
+    }
     if args.first().map(String::as_str) == Some("--create-ap-exec") {
         return create_ap::exec_gate(&args);
     }

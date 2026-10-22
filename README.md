@@ -18,8 +18,9 @@ teardown and forwarding leases. [Rust device ownership](docs/native-device-owner
 now handles interface creation and NetworkManager release/restoration. The native
 [daemon runtime](docs/native-daemons.md) now renders and launches hostapd/dnsmasq,
 with gated child recovery and private leases. [Rust startup radio checks](docs/native-startup-radio.md)
-now enforce the frozen plan and driver policy through launch. Bash retains
-option parsing, instance housekeeping and transaction dispatch.
+now enforce the frozen plan and driver policy through launch. The
+[Rust instance runner](docs/native-instance.md) owns options, instance markers,
+signals and housekeeping; native staging includes an ELF helper instead of Bash.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
@@ -27,8 +28,9 @@ are not yet validated production replacements.
 
 Build/tests require Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
 The native NetworkManager runtime uses NetworkManager, iw and ip without Python.
-Native create_ap retains Bash and create_ap networking dependencies; its backend
-does not require Python.
+Native create_ap uses iw/ip, hostapd, dnsmasq and iptables; its new backend
+requires neither Bash nor Python. Historical Bash helpers can still be supervised
+and recovered during a controlled migration.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).

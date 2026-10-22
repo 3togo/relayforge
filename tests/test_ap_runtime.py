@@ -318,7 +318,7 @@ class RuntimeTests(unittest.TestCase):
             manifest=staging.stage(BINARY,stage,'create_ap')
             self.assertEqual(len(manifest),7)
             self.assertTrue(all(not name.endswith('.py') for name in manifest))
-            subprocess.run(['/bin/bash','-n',str(stage/'usr/lib/relayforge/native/create_ap')],check=True,timeout=3)
+            self.assertTrue((stage/'usr/lib/relayforge/native/create_ap').read_bytes().startswith(b'\x7fELF'))
 
 
 class NativeRuntimeLifecycleTests(unittest.TestCase):
