@@ -119,7 +119,7 @@ def main():
     def read():
         try:
             allowed = {'Start', 'Stop', 'GetStatus', 'GetClients',
-                       'GetCapabilities', 'SwitchBandAndReconnect', 'PrepareFirewall'}
+                       'SwitchBandAndReconnect', 'PrepareFirewall'}
             while True:
                 line = sys.stdin.buffer.readline(LIMIT + 1)
                 if not line:

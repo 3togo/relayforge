@@ -6,7 +6,8 @@ claim of name or trademark availability.
 
 This is an early migration project. Rust owns the public D-Bus service,
 authorization, the complete configuration schema and credential store, Linux
-interface inventory, lifecycle intent and status snapshots. A private Python
+interface inventory, radio capability inspection, startup preflight, lifecycle
+intent and status snapshots. A private Python
 subprocess retains the pinned Wi-Fi Relay networking
 implementation, including create_ap and the experimental NetworkManager backend.
 This is not yet an entirely Rust networking stack or a production replacement.
@@ -17,8 +18,9 @@ Requires Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).
-The latest [validation report](docs/native-configuration-validation.md) records
-the exact implementation revision and remote checks.
+The [native radio migration](docs/native-radio.md) describes capability parsing
+and startup preflight. Its [validation report](docs/native-radio-validation.md)
+records the exact implementation revision and remote checks.
 
 ```sh
 cargo build --workspace --all-targets --locked

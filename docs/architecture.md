@@ -12,6 +12,7 @@ unchanged GTK / GNOME Shell / tray controls
    Rust lifecycle and protocol validation
         |-- native configuration/store
         |-- native sysfs inventory
+        |-- native radio parsing / startup preflight
         `-- anonymous stdin/stdout JSON pipes
                          |
               pinned Python backend adapter
@@ -36,13 +37,18 @@ snapshots so backend work cannot block them. A bounded request budget reserves
 capacity for Stop. Configuration is never placed in process arguments or emitted
 in Rust diagnostics.
 
-GetConfig, SetConfig and GetInterfaces are entirely native. Rust forbids these
+GetConfig, SetConfig, GetInterfaces and GetCapabilities are entirely native. Rust forbids these
 requests at the worker boundary. Configuration writes use a transaction gate
 shared with Start/band changes, and an exclusive configuration lock; Start and
 Stop take shared configuration locks so Stop can cancel an in-flight startup.
 Backend changes require both idle Rust state and a fresh legacy ownership/status
 inspection in the backend operation queue. Status/client snapshots remain
 responsive while configuration I/O runs on Tokio's blocking pool.
+
+Native radio inspection uses bounded read-only iw commands. Fresh Start requests
+pass native configuration/channel/concurrency checks before backend dispatch;
+Stop cancels pending inspection. The backend still rechecks live state and owns
+profile validation, activation and recovery. See [native radio](native-radio.md).
 
 compat/worker.py loads the pinned engine without registering a public D-Bus
 object. The parent is its sole client. The original GLib operation scheduler

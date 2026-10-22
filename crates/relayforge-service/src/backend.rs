@@ -118,7 +118,7 @@ impl Worker {
     pub async fn call(&self, method: Method, params: Value) -> Reply {
         if matches!(
             method,
-            Method::GetConfig | Method::SetConfig | Method::GetInterfaces
+            Method::GetConfig | Method::SetConfig | Method::GetInterfaces | Method::GetCapabilities
         ) {
             return Err("Method is implemented natively; worker delegation is forbidden".into());
         }
@@ -212,7 +212,7 @@ for line in sys.stdin:
         emit({'id':request['id'],'result':{'active':False}})
     elif method=='Start':
         emit({'id':request['id'],'error':'fixture rejection'})
-    elif method=='GetCapabilities':
+    elif method=='GetClients':
         print('malformed output',flush=True)
         break
     else:
@@ -262,7 +262,7 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         let worker = Worker::spawn(&root.0, sender).await.unwrap();
         assert!(timeout(
             Duration::from_secs(3),
-            worker.call(Method::GetCapabilities, Value::Null)
+            worker.call(Method::GetClients, Value::Null)
         )
         .await
         .unwrap()
@@ -277,7 +277,12 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         let root = Fixture::new(false);
         let (sender, _) = mpsc::channel(8);
         let worker = Worker::spawn(&root.0, sender).await.unwrap();
-        for method in [Method::GetConfig, Method::SetConfig, Method::GetInterfaces] {
+        for method in [
+            Method::GetConfig,
+            Method::SetConfig,
+            Method::GetInterfaces,
+            Method::GetCapabilities,
+        ] {
             assert!(worker
                 .call(method, Value::Null)
                 .await

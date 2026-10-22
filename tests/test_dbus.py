@@ -114,6 +114,46 @@ def fake_polkit(allowed=True):
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_native_capabilities_keep_the_complete_desktop_json_contract(self):
+        from test_radio import capture, legacy
+        record = capture()
+        with tempfile.TemporaryDirectory(prefix='relayforge-radio-') as directory:
+            path = Path(directory) / 'capture.json'
+            path.write_text(json.dumps(record))
+            with running('--demo-radio', path) as (bus, _):
+                self.assertEqual(decode_reply('GetCapabilities', call(bus, 'GetCapabilities')), legacy(record))
+                self.assertTrue(decode_reply('Start', call(bus, 'Start'))['success'])
+                call(bus, 'Stop')
+
+    def test_native_preflight_rejects_channels_before_demo_activation(self):
+        from test_radio import capture
+        record = capture()
+        record['phy'] = record['phy'].replace('(20.0 dBm)', '(20.0 dBm) (unknown restriction)')
+        with tempfile.TemporaryDirectory(prefix='relayforge-radio-') as directory:
+            path = Path(directory) / 'capture.json'
+            path.write_text(json.dumps(record))
+            with running('--demo-radio', path) as (bus, _):
+                rejected = decode_reply('Start', call(bus, 'Start'))
+                self.assertFalse(rejected['success'])
+                self.assertIn('permitted', rejected['error'])
+                self.assertFalse(decode_reply('GetStatus', call(bus, 'GetStatus'))['active'])
+                self.assertTrue(call(bus, 'Stop').unpack()[0])
+
+    def test_invalid_radio_capture_does_not_poison_status_or_stop(self):
+        from test_radio import capture
+        record = capture()
+        record['link'] = 'Unknown partial response'
+        with tempfile.TemporaryDirectory(prefix='relayforge-radio-') as directory:
+            path = Path(directory) / 'capture.json'
+            path.write_text(json.dumps(record))
+            with running('--demo-radio', path) as (bus, _):
+                before = decode_reply('GetStatus', call(bus, 'GetStatus'))
+                with self.assertRaises(GLib.Error):
+                    call(bus, 'GetCapabilities')
+                self.assertEqual(decode_reply('GetStatus', call(bus, 'GetStatus')), before)
+                self.assertFalse(decode_reply('Start', call(bus, 'Start'))['success'])
+                self.assertTrue(call(bus, 'Stop').unpack()[0])
+
     def test_native_config_survives_restart_and_legacy_reader_sees_exact_values(self):
         with tempfile.TemporaryDirectory(prefix='relayforge-config-') as directory:
             path = Path(directory) / 'hotspot.conf'

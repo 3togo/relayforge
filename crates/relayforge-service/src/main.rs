@@ -1,6 +1,7 @@
 mod backend;
 mod config_store;
 mod inventory;
+mod radio;
 use backend::Worker;
 use relayforge_core::{
     config::{self, parse_patch, Config},
@@ -25,6 +26,8 @@ struct Service {
     configuration: Arc<Mutex<config_store::Store>>,
     operations: tokio::sync::Mutex<()>,
     config_users: tokio::sync::RwLock<()>,
+    radio: radio::Source,
+    cancellation: tokio::sync::watch::Sender<u64>,
     demo: bool,
     demo_deny: bool,
     use_polkit: bool,
@@ -143,6 +146,15 @@ impl Service {
             None
         };
         match method {
+            Method::GetCapabilities => {
+                let config = self.load_config().await?;
+                let snapshot = self
+                    .radio
+                    .inspect(&config["WIFI_IFACE"])
+                    .await
+                    .map_err(|error| fdo::Error::Failed(error.into()))?;
+                return Ok(json!(snapshot.capabilities));
+            }
             Method::GetConfig => return self.load_config().await.map(|config| json!(config)),
             Method::SetConfig => return self.save_config(params).await.map(|_| json!(true)),
             Method::GetInterfaces => {
@@ -161,22 +173,52 @@ impl Service {
             }
             _ => {}
         }
-        let epoch = self
-            .core
-            .lock()
-            .unwrap()
-            .begin(method)
-            .map_err(|s| fdo::Error::Failed(s.into()))?;
-        if method == Method::Start {
-            // Revalidate on every Start, after recording cancellation intent.
-            // Missing credentials must not reach the legacy factory fallback.
-            if let Err(error) = self.load_config().await {
-                self.core.lock().unwrap().complete(method, epoch, false);
-                self.emit_status(connection).await;
-                return Err(error);
+        let (epoch, was_active) = {
+            let mut core = self.core.lock().unwrap();
+            let active = core.status.active;
+            let epoch = core
+                .begin(method)
+                .map_err(|s| fdo::Error::Failed(s.into()))?;
+            if method == Method::Stop {
+                self.cancellation
+                    .send_modify(|revision| *revision = revision.wrapping_add(1));
             }
+            (epoch, active)
+        };
+        let mut cancelled = self.cancellation.subscribe();
+        if method == Method::Start {
+            // Credentials and radio permissions must be fresh at every startup.
+            let config = match self.load_config().await {
+                Ok(config) => config,
+                Err(error) => {
+                    self.core.lock().unwrap().complete(method, epoch, false);
+                    self.emit_status(connection).await;
+                    return Err(error);
+                }
+            };
             if !self.core.lock().unwrap().is_current(epoch) {
                 return Ok(json!({"success":false,"error":"Startup cancelled"}));
+            }
+            if !was_active {
+                let inspection = tokio::select! {
+                    result = self.radio.inspect(&config["WIFI_IFACE"]) => result.and_then(|snapshot| snapshot.preflight(&config)),
+                    _ = cancelled.changed() => return Ok(json!({"success":false,"error":"Startup cancelled"})),
+                };
+                if !self.core.lock().unwrap().is_current(epoch) {
+                    return Ok(json!({"success":false,"error":"Startup cancelled"}));
+                }
+                if let Err(error) = inspection {
+                    {
+                        let mut core = self.core.lock().unwrap();
+                        if !core.is_current(epoch) {
+                            return Ok(json!({"success":false,"error":"Startup cancelled"}));
+                        }
+                        core.complete(method, epoch, false);
+                        core.status.error = Some(error.into());
+                    }
+                    self.emit_status(connection).await;
+                    return Ok(json!({"success":false,"error":error}));
+                }
             }
         }
         let result = match &self.worker {
@@ -332,9 +374,6 @@ impl Service {
                 self.demo_generation.fetch_add(1, Ordering::SeqCst);
                 Ok(json!(true))
             }
-            Method::GetCapabilities => Ok(
-                json!({"ap_2ghz":true,"ap_5ghz":false,"current_sta_band":"2.4","ap_sta_concurrent":false,"demo":true}),
-            ),
             Method::PrepareFirewall => Ok(json!(true)),
             Method::SwitchBandAndReconnect => {
                 let _ = connection;
@@ -527,9 +566,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [mode] if mode=="--demo" => (true,false,false,None,None),
         [mode] if mode=="--demo-deny" => (true,true,false,None,None),
         [mode] if mode=="--demo-polkit" => (true,false,true,None,None),
+        [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
         [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
-        _=>return Err("Usage: relayforge-service --demo | --demo-deny | --demo-polkit | --demo-config PATH | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
+        _=>return Err("Usage: relayforge-service --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
+    };
+    let radio = if args.first().map(String::as_str) == Some("--demo-radio") {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(&args[1])?
+            .take((4 * relayforge_core::radio::MAX_CAPTURE + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 4 * relayforge_core::radio::MAX_CAPTURE {
+            return Err("Radio replay exceeds limit".into());
+        }
+        radio::Source::Replay(Box::new(serde_json::from_slice(&bytes)?))
+    } else if demo {
+        radio::Source::Demo
+    } else {
+        radio::Source::System
     };
     if !demo {
         // SAFETY: geteuid has no preconditions.
@@ -584,6 +639,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         configuration: Arc::new(Mutex::new(configuration)),
         operations: tokio::sync::Mutex::new(()),
         config_users: tokio::sync::RwLock::new(()),
+        radio,
+        cancellation: tokio::sync::watch::channel(0).0,
         demo,
         demo_deny: deny,
         use_polkit,

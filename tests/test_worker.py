@@ -98,6 +98,11 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.process.wait(timeout=5), 0)
         self.assertEqual(self.trace.read_text(), 'stopped')
 
+    def test_capability_requests_are_removed_from_the_worker_protocol(self):
+        self.send({'id': 1, 'method': 'GetCapabilities'})
+        self.assertEqual(self.process.wait(timeout=5), 0)
+        self.assertEqual(self.trace.read_text(), 'stopped')
+
     def test_stop_interrupts_pending_start(self):
         self.send({'id': 1, 'method': 'Start'})
         self.assertEqual(self.frame()['signal'], 'StatusChanged')
