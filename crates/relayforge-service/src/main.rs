@@ -1,6 +1,8 @@
 mod backend;
 mod config_store;
 mod inventory;
+mod networkmanager;
+mod nm_journal;
 mod radio;
 use backend::Worker;
 use relayforge_core::{
@@ -23,6 +25,7 @@ struct Service {
     core: Arc<Mutex<Lifecycle>>,
     clients: Arc<Mutex<Value>>,
     worker: Option<Arc<Worker>>,
+    native: Option<Arc<networkmanager::Backend>>,
     configuration: Arc<Mutex<config_store::Store>>,
     operations: tokio::sync::Mutex<()>,
     config_users: tokio::sync::RwLock<()>,
@@ -145,6 +148,17 @@ impl Service {
         } else {
             None
         };
+        if self.native.is_some() {
+            match method {
+                Method::SwitchBandAndReconnect => {
+                    return Ok(
+                        json!({"success":false,"error":"Native sharing preserves the existing upstream; reconnect Wi-Fi explicitly before Start"}),
+                    )
+                }
+                Method::PrepareFirewall => return Ok(json!(true)),
+                _ => {}
+            }
+        }
         match method {
             Method::GetCapabilities => {
                 let config = self.load_config().await?;
@@ -186,6 +200,7 @@ impl Service {
             (epoch, active)
         };
         let mut cancelled = self.cancellation.subscribe();
+        let mut startup_config = None;
         if method == Method::Start {
             // Credentials and radio permissions must be fresh at every startup.
             let config = match self.load_config().await {
@@ -220,10 +235,21 @@ impl Service {
                     return Ok(json!({"success":false,"error":error}));
                 }
             }
+            startup_config = Some(config);
         }
-        let result = match &self.worker {
-            Some(worker) => worker.call(method, params).await,
-            None => self.demo(method, params, connection).await,
+        let result = if let Some(native) = &self.native {
+            match method {
+                Method::Start => Ok(native
+                    .start(startup_config.as_ref().unwrap(), cancelled)
+                    .await),
+                Method::Stop => Ok(json!(native.stop().await)),
+                _ => Err("Unsupported native operation".into()),
+            }
+        } else {
+            match &self.worker {
+                Some(worker) => worker.call(method, params).await,
+                None => self.demo(method, params, connection).await,
+            }
         };
         match result {
             Ok(value) => {
@@ -242,6 +268,11 @@ impl Service {
                         let _ = core.observe(status.clone());
                     }
                     core.complete(method, epoch, success);
+                    if self.native.is_some() && !success && core.is_current(epoch) {
+                        if let Some(error) = value.get("error").and_then(Value::as_str) {
+                            core.status.error = Some(error.into());
+                        }
+                    }
                 }
                 if method == Method::Stop && success {
                     *self.clients.lock().unwrap() = json!([]);
@@ -291,6 +322,9 @@ impl Service {
         let current = self.load_config().await?;
         let merged = config::merge(&current, &patch)
             .map_err(|error| fdo::Error::InvalidArgs(error.into()))?;
+        if self.native.is_some() && merged["BACKEND"] != "networkmanager" {
+            return Err(fdo::Error::InvalidArgs("This native service mode requires BACKEND=networkmanager; use compatibility service mode for create_ap".into()));
+        }
         let switching = current["BACKEND"] != merged["BACKEND"];
         if switching {
             let idle = {
@@ -562,20 +596,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("--init-config requires an absolute path")?;
         let mut ssid = "Hotspot";
         let mut interface = None;
+        let mut initial_backend = "create_ap";
         let mut pairs = args[2..].chunks_exact(2);
         for pair in &mut pairs {
             match pair[0].as_str() {
                 "--ssid" => ssid = pair[1].as_str(),
                 "--wifi-interface" => interface = Some(pair[1].as_str()),
+                "--backend" => initial_backend = pair[1].as_str(),
                 _ => return Err("Unknown configuration initialization option".into()),
             }
         }
         if !pairs.remainder().is_empty() {
             return Err("Configuration initialization options require values".into());
         }
+        config::parse_patch(&json!({"BACKEND": initial_backend}).to_string())?;
         // SAFETY: geteuid has no preconditions.
         let file = config_store::ConfigFile::open(Path::new(path), unsafe { libc::geteuid() })?;
         let created = file.initialize(ssid, interface)?;
+        if created && initial_backend != "create_ap" {
+            config_store::Store::Disk(file).save(
+                &Config::from([("BACKEND".into(), initial_backend.into())]),
+                true,
+            )?;
+        }
         eprintln!(
             "{}",
             if created {
@@ -587,15 +630,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let (demo,deny,use_polkit,root,config_path)=match args.as_slice() {
+        [mode] if mode=="--native-networkmanager" => (false,false,true,None,Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
+        [mode,_capture,path,_state] if mode=="--test-networkmanager" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode] if mode=="--demo" => (true,false,false,None,None),
         [mode] if mode=="--demo-deny" => (true,true,false,None,None),
         [mode] if mode=="--demo-polkit" => (true,false,true,None,None),
         [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
         [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
-        _=>return Err("Usage: relayforge-service --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
+        _=>return Err("Usage: relayforge-service --native-networkmanager | --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] [--backend create_ap|networkmanager] | --system --legacy-root /root-owned/installation".into()),
     };
-    let radio = if args.first().map(String::as_str) == Some("--demo-radio") {
+    let native_mode = matches!(
+        args.first().map(String::as_str),
+        Some("--native-networkmanager" | "--test-networkmanager")
+    );
+    let fixture = args.first().map(String::as_str) == Some("--test-networkmanager");
+    let radio = if args.first().map(String::as_str) == Some("--demo-radio") || fixture {
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(&args[1])?
@@ -615,7 +665,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if unsafe { libc::geteuid() } != 0 {
             return Err("System mode requires root".into());
         }
-        verify_tree(root.as_ref().unwrap())?;
+        if let Some(root) = &root {
+            verify_tree(root)?;
+        }
+        if native_mode
+            && [
+                "/run/wifi-relay/nm-owned.json",
+                "/run/wifi-relay/create-ap.pid",
+            ]
+            .iter()
+            .any(|p| Path::new(p).exists())
+        {
+            return Err(
+                "Stop and clean up the existing compatibility backend before using native mode"
+                    .into(),
+            );
+        }
     }
     let configuration = if let Some(path) = config_path {
         // SAFETY: geteuid has no preconditions.
@@ -636,6 +701,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         config_store::Store::Memory(config)
     };
+    let native = if native_mode {
+        if configuration.load()?["BACKEND"] != "networkmanager" {
+            return Err("Native service requires BACKEND=networkmanager".into());
+        }
+        let path = if fixture {
+            PathBuf::from(&args[3])
+        } else {
+            PathBuf::from("/run/relayforge")
+        };
+        if !fixture && !path.exists() {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+        }
+        // SAFETY: geteuid has no preconditions.
+        Some(networkmanager::Backend::new(
+            networkmanager::Platform { fixture },
+            nm_journal::Journal::open(&path, unsafe { libc::geteuid() })?,
+        ))
+    } else {
+        None
+    };
     let builder = if demo {
         zbus::connection::Builder::session()?
     } else {
@@ -648,6 +734,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if reply != fdo::RequestNameReply::PrimaryOwner {
         return Err("Existing Wi-Fi Relay service owns the compatibility name".into());
     }
+    if let Some(native) = &native {
+        native.recover().await?;
+    }
     let core = Arc::new(Mutex::new(Lifecycle::default()));
     let clients = Arc::new(Mutex::new(json!([])));
     let (events, mut receiver) = mpsc::channel::<backend::Event>(64);
@@ -656,15 +745,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let (cancellation, _) = tokio::sync::watch::channel(0);
     let service = Service {
         core: core.clone(),
         clients: clients.clone(),
         worker: worker.clone(),
+        native: native.clone(),
         configuration: Arc::new(Mutex::new(configuration)),
         operations: tokio::sync::Mutex::new(()),
         config_users: tokio::sync::RwLock::new(()),
         radio,
-        cancellation: tokio::sync::watch::channel(0).0,
+        cancellation: cancellation.clone(),
         demo,
         demo_deny: deny,
         use_polkit,
@@ -677,6 +768,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .object_server()
         .remove::<Initializing, _>(OBJECT_PATH)
         .await?;
+    let native_monitor = native.clone().map(|backend| {
+        let core = core.clone();
+        let clients = clients.clone();
+        let connection = connection.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let epoch = core.lock().unwrap().epoch();
+                if let Some((status, observed)) = backend.poll().await {
+                    let body = {
+                        let mut core = core.lock().unwrap();
+                        if !core.is_current(epoch) {
+                            continue;
+                        }
+                        let _ = core.observe(json!(status));
+                        serde_json::to_string(&core.status).unwrap()
+                    };
+                    let _ = connection
+                        .emit_signal(
+                            None::<&str>,
+                            OBJECT_PATH,
+                            BUS_NAME,
+                            "StatusChanged",
+                            &(body,),
+                        )
+                        .await;
+                    let changed = {
+                        let mut old = clients.lock().unwrap();
+                        let changed = *old != observed;
+                        *old = observed.clone();
+                        changed
+                    };
+                    if changed {
+                        let _ = connection
+                            .emit_signal(
+                                None::<&str>,
+                                OBJECT_PATH,
+                                BUS_NAME,
+                                "ClientsChanged",
+                                &(observed.to_string(),),
+                            )
+                            .await;
+                    }
+                }
+            }
+        })
+    });
     let event_connection = connection.clone();
     let shutdown_core = core.clone();
     let failed_worker = worker.clone();
@@ -734,12 +872,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "RelayForge ready ({})",
         if demo {
             "demo: no networking"
+        } else if native_mode {
+            "native NetworkManager backend"
         } else {
             "compatibility backend"
         }
     );
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! { _=tokio::signal::ctrl_c()=>{}, _=terminate.recv()=>{} }
+    cancellation.send_modify(|revision| *revision = revision.wrapping_add(1));
+    if let Some(task) = native_monitor {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(native) = native {
+        if !native.stop().await {
+            return Err("Native shutdown cleanup unconfirmed; journal retained".into());
+        }
+    }
     shutdown_core.lock().unwrap().backend_lost();
     if let Some(worker) = worker {
         worker.shutdown().await?;

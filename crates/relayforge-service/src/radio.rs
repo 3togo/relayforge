@@ -36,7 +36,7 @@ async fn drain(mut pipe: impl AsyncRead + Unpin) -> Result<Vec<u8>, &'static str
     }
     Ok(bytes)
 }
-async fn command(
+pub(crate) async fn command(
     program: &Path,
     args: &[&str],
     deadline: Duration,

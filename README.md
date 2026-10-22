@@ -4,17 +4,18 @@ A Rust core for Linux Wi-Fi sharing, with the existing Wi-Fi Relay GTK settings,
 GNOME Shell extension and tray controls. The name is a working suggestion, not a
 claim of name or trademark availability.
 
-This is an early migration project. Rust owns the public D-Bus service,
-authorization, the complete configuration schema and credential store, Linux
-interface inventory, radio capability inspection, startup preflight, lifecycle
-intent and status snapshots. A private Python
-subprocess retains the pinned Wi-Fi Relay networking
-implementation, including create_ap and the experimental NetworkManager backend.
-This is not yet an entirely Rust networking stack or a production replacement.
+This is an early migration project. Rust owns the desktop D-Bus service,
+authorization, configuration and credential storage, interface/radio inspection,
+lifecycle intent and status snapshots. The opt-in
+[native NetworkManager mode](docs/native-networkmanager.md) also controls
+activation, clients, cancellation, ownership recovery and cleanup without a
+Python worker. The compatibility mode retains the pinned Python/create_ap engine.
+Neither mode is yet a validated production replacement.
 
 ## Build and check
 
-Requires Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
+Build/tests require Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
+The native runtime uses NetworkManager, iw and ip, and does not require Python.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).
@@ -90,7 +91,7 @@ identifiers allows the existing desktop controls to work unchanged. RelayForge
 and Wi-Fi Relay cannot own that service name simultaneously; RelayForge refuses
 replacement and queueing.
 
-System mode is explicit:
+Compatibility system mode is explicit:
 
 ```text
 relayforge-service --system --legacy-root /usr/lib/relayforge
@@ -103,8 +104,16 @@ with mode 0600 and an explicit PASSPHRASE is required. There is no factory-passw
 mode. Existing D-Bus and Polkit policies must be installed for the compatibility
 name. System mode always uses Polkit; demo authorization cannot enable it.
 
-No installer, automatic service replacement, system activation change, package
-release, or live networking trial is supplied by this development project. Run only
+The separate native service uses `--native-networkmanager` and requires
+`BACKEND=networkmanager` in the same private configuration. It keeps the desktop
+wire contract and declines band switching to preserve upstream. See the
+[native mode and staging guide](docs/native-networkmanager.md) and
+[validation report](docs/native-networkmanager-validation.md). No native service
+has been installed or enabled by this migration.
+
+No installer or package release is supplied. Staging creates a reviewable payload;
+it does not replace services or change system activation. Native hotspot activation
+has not been tested on physical hardware. Run only
 in a prepared disposable environment until the migration and hardware gates in
 [the architecture plan](docs/architecture.md) are completed. The original
 checkout, installed services and networking configuration are independent of this

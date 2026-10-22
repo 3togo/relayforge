@@ -13,6 +13,7 @@ unchanged GTK / GNOME Shell / tray controls
         |-- native configuration/store
         |-- native sysfs inventory
         |-- native radio parsing / startup preflight
+        |-- opt-in native NetworkManager controller / ownership journal
         `-- anonymous stdin/stdout JSON pipes
                          |
               pinned Python backend adapter
@@ -59,10 +60,15 @@ operation replies to preserve stream order. EOF, malformed input and termination
 signals request backend cleanup. A broken transport produces an explicit failed
 state; it never proves that network resources have disappeared.
 
-Both system-mode processes still run with privileges. This step does not reduce
-the entire networking implementation's trusted code base or remove Python,
-GLib, Bash, hostapd, dnsmasq or driver dependencies. The adapter still owns actual
-network operations, ownership journals, recovery and automatic resume policy.
+In compatibility mode both system-mode processes still run with privileges. Native
+NetworkManager mode has a single privileged Rust service; it does not spawn the
+Python worker. See [native mode](native-networkmanager.md) for lifecycle, journal,
+compatibility boundaries and staging. The native path still uses external iw/ip
+utilities and delegates shared networking to NetworkManager.
+
+Compatibility mode retains Python, GLib, Bash, hostapd, dnsmasq and driver
+dependencies. Its adapter still owns actual network operations, ownership
+journals, recovery and automatic resume policy.
 
 ## Next extraction steps
 
@@ -70,28 +76,31 @@ network operations, ownership journals, recovery and automatic resume policy.
    credential creation, and differential validation. Existing factory-password
    rotation and legacy interface-repair installer hooks are not implemented;
    existing files are retained. See [native configuration](native-configuration.md).
-2. Completed: native interface enumeration. Next: radio capabilities and
-   regulatory preflight in a backend-independent
-   capability module. Remove the production-backend-to-developer-probe import
-   relationship. Do not relax channel restrictions to make a test pass.
-3. Port ownership journals, PID/interface identity checks, timeout/cancellation,
-   crash cleanup and sleep recovery. Use deterministic fault tests and replay
-   the historical failure cases before permitting privileged deployment.
-4. Implement a native Rust NetworkManager adapter. Retain volatile profiles and
-   client-bound activation; retain conservative AP+STA preflight. The documented
-   AddAndActivateConnection2 options do not establish native virtual-interface
-   ownership or radio compatibility on a particular machine.
-5. Move create_ap supervision into Rust while retaining the current compatibility
-   path until feature parity is demonstrated. Replacing shell network management
-   itself is a separate project decision.
-6. Add reviewed packages, explicit conflict/upgrade/rollback behavior and system
-   service hardening. Then replay physical DHCP, DNS, verified HTTPS, cancellation,
-   daemon/worker crash, radio toggles, suspend and multiple-driver tests.
+2. Completed: native interface enumeration, radio capability parsing and initial
+   regulatory preflight. The pinned compatibility engine remains unchanged;
+   native mode does not import its developer probe.
+3. Completed for native mode: ownership intent journals, interface identity
+   checks, cancellation, crash cleanup and retry after uncertain cleanup. Native
+   automatic resume and sleep recovery remain future work.
+4. Completed as an opt-in mode: native Rust NetworkManager control using volatile
+   profiles and client-bound activation. Both NM-owned child interfaces and
+   Rust-controlled iw helpers are covered by simulated fault tests. These tests
+   do not prove driver or NM extension compatibility on a physical machine.
+5. Next: move create_ap supervision into Rust while retaining the current
+   compatibility path until feature parity is demonstrated. Replacing shell
+   network management itself is a separate project decision.
+6. A native service, bus activation and policy payload can now be staged for
+   review. Distribution packages, deployed upgrade/rollback validation and
+   additional service hardening remain pending. Physical DHCP, DNS, verified
+   HTTPS, cancellation, crashes, radio toggles, suspend and multiple-driver
+   activation checks remain deployment gates.
 
 The milestone tests establish protocol/client and simulated lifecycle behavior.
-They do not transfer Wi-Fi Relay's release certification to RelayForge. No live
-hotspot, real Polkit authentication agent, physical desktop, GNOME Shell load,
-firewall rule or kernel interface was exercised for this project.
+They do not transfer Wi-Fi Relay's release certification to RelayForge. The
+[physical radio report](physical-radio-validation.md) covers read-only adapter
+inspection. No native hotspot, real Polkit authentication agent, GNOME Shell
+load, firewall mutation or native AP interface creation has been physically
+validated. The laptop's existing Wi-Fi remains untouched by native activation.
 
 ## Reference documentation
 

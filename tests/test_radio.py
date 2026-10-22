@@ -125,3 +125,16 @@ class RadioDiagnosticTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(result.stdout, b'')
             self.assertNotIn(b'private-test-password', result.stderr)
+
+    def test_initial_backend_selection_never_overwrites_existing_configuration(self):
+        import tempfile
+        binary = Path(os.environ.get('RELAYFORGE_BINARY', ROOT / 'target/debug/relayforge-service'))
+        with tempfile.TemporaryDirectory(prefix='relayforge-initial-backend-') as directory:
+            path = Path(directory) / 'config'
+            result = subprocess.run([str(binary), '--init-config', str(path), '--backend', 'networkmanager'],capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            before=path.read_bytes()
+            self.assertIn(b'BACKEND=networkmanager',before)
+            result = subprocess.run([str(binary), '--init-config', str(path), '--backend', 'create_ap'],capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(path.read_bytes(),before)

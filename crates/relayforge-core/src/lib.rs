@@ -111,6 +111,10 @@ impl Lifecycle {
         Ok(self.epoch)
     }
 
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     pub fn is_current(&self, epoch: u64) -> bool {
         self.epoch == epoch
     }
@@ -130,7 +134,12 @@ impl Lifecycle {
         if self.stop_requested {
             // A delayed startup notification cannot undo the user's Stop intent.
             status.desired_active = false;
-            status.state = "stopping".into();
+            if self.status.state == "failed" {
+                status.state = "failed".into();
+                status.error = self.status.error.clone().or(status.error);
+            } else {
+                status.state = "stopping".into();
+            }
         } else if status.state.is_empty() {
             status.state = if status.active { "active" } else { "idle" }.into();
         }
@@ -235,6 +244,11 @@ mod tests {
         core.finish(Method::Stop, false);
         assert!(core.status.active);
         assert_eq!(core.status.state, "failed");
+        core.observe(json!({"active":false,"state":"idle","desired_active":true}))
+            .unwrap();
+        assert_eq!(core.status.state, "failed");
+        assert!(!core.status.desired_active);
+        assert!(core.status.error.is_some());
         assert!(core.begin(Method::Start).is_err());
         core.begin(Method::Stop).unwrap();
         core.finish(Method::Stop, true);
