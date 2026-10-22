@@ -16,6 +16,8 @@ The implementation has been tested with private-bus service-manager fixtures and
 real Rust demo processes. Privileged host installation, real systemd/D-Bus
 integration and physical handover remain release gates; no active host was changed
 to establish these results.
+The [validation report](native-live-deployment-validation.md) records the exact
+candidate, checks, artifact hashes and retained gates.
 
 ## Explicit commands
 
