@@ -20,7 +20,9 @@ results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).
 The [native radio migration](docs/native-radio.md) describes capability parsing
 and startup preflight. Its [validation report](docs/native-radio-validation.md)
-records the exact implementation revision and remote checks.
+records the exact implementation revision and remote checks. The subsequent
+[physical radio report](docs/physical-radio-validation.md) records live read-only
+checks and the constraint preventing hotspot activation without changing upstream.
 
 ```sh
 cargo build --workspace --all-targets --locked
