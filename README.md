@@ -34,6 +34,8 @@ hardens cancellation, status publication and inhibitor recovery; its
 upgrade, interrupted recovery and rollback in an explicitly selected dormant image.
 Its [validation report](docs/native-deployment-validation.md) records the tested
 revision and the remaining privileged/live-deployment gates.
+The [deployment race audit](docs/native-deployment-audit-validation.md) hardens
+interrupted aborts, runtime exclusion, recovery syncing and rollback preflight.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
