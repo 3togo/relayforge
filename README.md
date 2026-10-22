@@ -139,6 +139,8 @@ the next Rust extraction and its interrupted-transaction and desktop checks. The
 interface creation and NetworkManager restoration, including private-bus checks.
 The [daemon runtime report](docs/native-daemons-validation.md) records native
 configuration, gated launch, readiness, private leases and desktop failure checks.
+The [startup radio report](docs/native-startup-radio-validation.md) records the
+subsequent driver/channel extraction, baseline checks and desktop rejection test.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
