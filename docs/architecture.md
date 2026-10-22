@@ -89,13 +89,13 @@ journals, recovery and automatic resume policy.
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
    client reports, cancellation and owned recovery. The pinned Bash networking
-   adapter retains interface, sysctl and daemon operations; snapshot/child
-   recovery and NAT/DNS/DHCP firewall transactions are now Rust. See
+   adapter retains interface allocation, NetworkManager unmanaged metadata and
+   daemon operations; snapshot/child recovery, NAT/DNS/DHCP firewall transactions,
+   AP setup/teardown and shared forwarding leases are now Rust. See
    [create_ap supervision](native-create-ap.md) and [native recovery](native-recovery.md).
    Compatibility mode remains until
    feature parity is demonstrated. See [firewall extraction](native-firewall.md);
-   interface transactions, daemon launch/configuration and shared forwarding
-   state remain the next shell networking extractions.
+   interface allocation and daemon launch/configuration remain shell extractions.
 6. A native service, bus activation and policy payload can now be staged for
    review. Distribution packages, deployed upgrade/rollback validation and
    additional service hardening remain pending. Physical DHCP, DNS, verified
@@ -117,3 +117,7 @@ validated. The laptop's existing Wi-Fi remains untouched by native activation.
   AddAndActivateConnection2 supports volatile persistence and dbus-client lifetime.
 - [Polkit Authority interface](https://www.freedesktop.org/software/polkit/docs/latest/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html):
   CheckAuthorization and system-bus-name subjects.
+
+Native create_ap [network transactions](native-network-state.md) now own AP
+link/type/address setup, teardown and shared forwarding sysctl restoration.
+Interface allocation and NetworkManager unmanaged metadata remain in the adapter.

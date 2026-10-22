@@ -73,6 +73,56 @@ def native_engine(source):
     text=text.replace(anchor,'    "$RUNTIME_HELPER" --create-ap-runtime firewall-remove "$CONFDIR" || failed=1\n\n'+anchor)
     if re.search(r'^\s*iptables ',text,re.MULTILINE):
         raise ValueError('Native adapter still executes Bash firewall commands')
+    def section(start,end,replacement):
+        nonlocal text
+        if text.count(start)!=1 or end not in text[text.index(start):]:
+            raise ValueError('Pinned network transaction boundary changed')
+        first=text.index(start)
+        last=text.index(end,first)
+        text=text[:first]+replacement+text[last:]
+
+    section('    local found=0\n    for x in $(list_running_conf); do\n',
+            '    if [[ "$SHARE_METHOD" != "none" ]]; then\n',
+            '    "$RUNTIME_HELPER" --create-ap-runtime forwarding-release "$CONFDIR" || failed=1\n'
+            '    if ! has_running_instance; then\n'
+            '        stop_recorded_children "$COMMON_CONFDIR" || failed=1\n'
+            '        [[ $failed -eq 0 ]] && rm -rf "$COMMON_CONFDIR"\n'
+            '    fi\n\n')
+    section('    if [[ $NO_VIRT -eq 0 ]]; then\n        if [[ -n "$VWIFI_IFACE" ]]; then\n',
+            '    for x in $ADDED_UNMANAGED; do\n',
+            '    if [[ $NO_VIRT -eq 0 && -n "$VWIFI_IFACE" ]]; then\n'
+            '        networkmanager_rm_unmanaged_if_needed "$VWIFI_IFACE" || failed=1\n'
+            '    fi\n'
+            '    if "$RUNTIME_HELPER" --create-ap-runtime interface-remove "$CONFDIR"; then\n'
+            '        [[ $NO_VIRT -eq 0 && -n "$VWIFI_IFACE" ]] && dealloc_iface "$VWIFI_IFACE"\n'
+            '    else\n        failed=1\n    fi\n'
+            '    if [[ $NO_VIRT -eq 1 && $PHYSICAL_CONFIGURED -eq 1 ]]; then\n'
+            '        networkmanager_rm_unmanaged_if_needed "$WIFI_IFACE" || failed=1\n'
+            '    fi\n')
+    section('if [[ "$SHARE_METHOD" == "nat" ]]; then\n    echo $INTERNET_IFACE > $CONFDIR/nat_internet_iface\n',
+            'mutex_unlock\n\nsave_recovery_state',
+            'if [[ "$SHARE_METHOD" == "nat" ]]; then\n'
+            '    echo "$INTERNET_IFACE" > "$CONFDIR/nat_internet_iface"\nfi\n')
+    section('# initialize WiFi interface\n','# enable Internet sharing\n',
+            '# Rust journals the baseline before configuring the recorded AP.\n'
+            'if [[ $NO_VIRT -eq 1 ]]; then PHYSICAL_CONFIGURED=1; fi\n'
+            'save_recovery_state || die "Could not record interface configuration."\n'
+            '"$RUNTIME_HELPER" --create-ap-runtime interface-configure "$CONFDIR" || die\n\n')
+    writes=('        echo 1 > /proc/sys/net/ipv4/conf/$INTERNET_IFACE/forwarding || die\n'
+            '        echo 1 > /proc/sys/net/ipv4/ip_forward || die\n')
+    if text.count(writes)!=1:
+        raise ValueError('Pinned forwarding writes changed')
+    text=text.replace(writes,'        "$RUNTIME_HELPER" --create-ap-runtime forwarding-enable "$CONFDIR" || die\n')
+    # Native mode declines bridge sharing before its historical code is reachable.
+    section('        # disable iptables rules for bridged interfaces\n',
+            '        # to initialize the bridge interface correctly',
+            '        die "Bridge sharing is unavailable in native create_ap mode."\n\n')
+    power='if [[ $USE_IWCONFIG -eq 0 ]]; then\n    iw dev ${WIFI_IFACE} set power_save off\nfi\n'
+    if text.count(power)!=1:
+        raise ValueError('Pinned parent power-save boundary changed')
+    text=text.replace(power,'# Native setup preserves the parent station power-save setting.\n')
+    if '/proc/sys/net/' in text:
+        raise ValueError('Native adapter still accesses Bash sysctls')
     return text.encode('utf-8')
 
 

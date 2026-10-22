@@ -8,8 +8,9 @@ Python D-Bus/GLib worker is never constructed in this mode.
 
 Rust also implements snapshots and child recovery through the
 [native recovery runtime](native-recovery.md). A generated adapter of the pinned
-Bash script configures hostapd, dnsmasq, interfaces and firewall rules while
-calling Rust for recovery and [firewall rule transactions](native-firewall.md). Neither native service mode
+Bash script allocates interfaces, configures/launches hostapd and dnsmasq, and
+calls Rust for recovery, [firewall transactions](native-firewall.md) and
+[AP setup/forwarding transactions](native-network-state.md). Neither native service mode
 requires a Python backend; the original compatibility mode remains available.
 
 ## Startup and ownership
@@ -89,7 +90,7 @@ manifest: the Rust binary, alternative systemd unit and D-Bus activation file,
 original bus and Polkit policies, license and generated native Bash adapter. It
 excludes the Python supervisor/worker, credentials, configuration and desktop
 replacements. The source vendor files retain their original hashes; staging
-applies only the reviewed helper-call transformation. Staging never installs
+applies the reviewed recovery, firewall and network transaction transformations. Staging never installs
 files, enables services or reloads D-Bus.
 
 The systemd unit conflicts with both the compatibility service and native
@@ -111,3 +112,7 @@ output bounds, recovery and the unmodified asynchronous desktop client.
 Those checks do not establish live create_ap behavior, driver compatibility,
 DHCP/DNS/NAT connectivity, real Polkit authorization, suspend/resume, installation
 or rollback. The current Wi-Fi connection and installed service remain untouched.
+
+AP setup/teardown and forwarding leases are now delegated to
+[Rust network transactions](native-network-state.md); interface allocation,
+NetworkManager unmanaged metadata and daemon configuration/launch remain Bash.

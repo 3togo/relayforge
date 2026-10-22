@@ -333,6 +333,10 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
         (state/'net/demo0').mkdir()
         (state/'net/demo0/ifindex').write_text('7\n')
         (state/'net/demo0/address').write_text('02:00:00:00:00:07\n')
+        private(state/'network-state.json',dict(interfaces={
+            'demo0':dict(identity=dict(ifindex=7,mac='02:00:00:00:00:07'),kind='managed',up=True,connected=True,addresses=['192.0.2.10/24']),
+            'apfake0':dict(identity=dict(ifindex=101,mac='02:77:88:99:aa:bb'),kind='AP',up=False,connected=False,addresses=[])},
+            **{'global':0},forwarding=dict(all=0,default=0,demo0=0,apfake0=0)))
         private(state/'firewall.json',dict(filter='',nat=''))
         private(state/'firewall-state.json',dict(rules=[dict(table='filter',chain='INPUT',args=['--comment','foreign-preserved','-j','ACCEPT'])]))
 
@@ -407,3 +411,24 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
                 self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
                 self.assertFalse((context.state/'create-ap.json').exists())
                 self.assertEqual(len(json.loads(path.read_text())['rules']),1)
+
+    def test_forwarding_failure_retains_journal_and_desktop_stop_can_retry(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply
+        with supervised_bench() as context:
+            self.prepare(context)
+            with self.service(context) as (bus,_):
+                self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
+                path=context.state/'network-state.json'
+                data=json.loads(path.read_text());data['fail']=True;private(path,data)
+                self.assertFalse(decode_reply('Stop',call(bus,'Stop')))
+                self.assertTrue((context.state/'create-ap.json').exists())
+                self.assertTrue((context.state/'engine/forwarding.json').exists())
+                data=json.loads(path.read_text());data['fail']=False;private(path,data)
+                self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                self.assertFalse((context.state/'create-ap.json').exists())
+                final=json.loads(path.read_text())
+                self.assertEqual(final['global'],0)
+                self.assertEqual(final['forwarding'],dict(all=0,default=0,demo0=0))
+                self.assertEqual(final['interfaces']['demo0']['addresses'],['192.0.2.10/24'])
+                self.assertFalse((context.state/'engine/forwarding.json').exists())

@@ -9,7 +9,8 @@ cleanup_owned() {
     runtime stop-children "$CONFDIR" || return 1
     runtime check-interfaces "$CONFDIR" || return 1
     runtime firewall-remove "$CONFDIR" || return 1
-    rm -rf -- "$root/net/$VWIFI_IFACE"
+    runtime forwarding-release "$CONFDIR" || return 1
+    runtime interface-remove "$CONFDIR" || return 1
     runtime verify-cleanup "$CONFDIR" || return 1
     rm -rf -- "$CONFDIR"
     rm -f -- "$DAEMON_PIDFILE" "$DAEMON_PIDFILE.ready"
@@ -53,6 +54,8 @@ WIFI_IFACE=$VWIFI_IFACE
 args=()
 for name in CONFDIR COMMON_CONFDIR WIFI_IFACE VWIFI_IFACE INTERNET_IFACE BRIDGE_IFACE OLD_MACADDR NEW_MACADDR NO_VIRT SHARE_METHOD NO_DNS DNS_PORT GATEWAY RUNNING_AS_DAEMON DAEMON_PIDFILE ADDED_UNMANAGED RULE_COMMENT BRIDGE_CREATED PHYSICAL_CONFIGURED; do args+=("$name=${!name}"); done
 runtime save "$CONFDIR" "$$" "${args[@]}"
+runtime interface-configure "$CONFDIR"
+runtime forwarding-enable "$CONFDIR"
 for phase in nat dns dhcp; do runtime firewall-add "$CONFDIR" "$phase"; done
 printf 'fixture\n' > "$CONFDIR/hostapd.conf"
 "$root/bin/hostapd" "$CONFDIR/hostapd.conf" &

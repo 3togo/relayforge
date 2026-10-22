@@ -5,10 +5,10 @@ iptables execution, rule removal and absence checks to Rust. The public desktop
 methods, signals, status and authorization remain unchanged. Neither this change
 nor staging installs a service, activates sharing or changes an existing network.
 
-This is one complete extraction from the Bash engine. Interface allocation and
-configuration, NetworkManager unmanaged-device handling, forwarding sysctl
-backup/restore, hostapd/dnsmasq configuration and launch, and optional module
-loading still use the generated Bash adapter. Native mode continues to decline
+This is one complete extraction from the Bash engine. Interface allocation, NetworkManager unmanaged-device handling,
+hostapd/dnsmasq configuration and launch, and optional module loading still use
+the generated Bash adapter. [Rust network transactions](native-network-state.md)
+now own AP setup/teardown and forwarding sysctl leases. Native mode continues to decline
 band switching, bridge mode and COUNTRY overrides. Physical validation remains
 pending; the current Wi-Fi connection was not used for activation.
 
@@ -90,6 +90,5 @@ Live iptables variants, kernel behavior, distribution firewall interaction,
 DHCP/DNS/NAT connectivity, upgrade/rollback and driver behavior still require a
 controlled hardware window. Use the previous matching payload to Stop and confirm
 cleanup before changing a live installation; do not bypass a pending journal.
-The next extractions are interface transactions, daemon configuration/launch and
-shared forwarding-state ownership. See [native recovery](native-recovery.md) and
+Daemon configuration/launch and interface allocation remain future extractions. See [native recovery](native-recovery.md) and
 [create_ap supervision](native-create-ap.md) for the retained operational limits.

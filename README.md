@@ -13,8 +13,9 @@ Python worker. The opt-in [Rust create_ap supervisor](docs/native-create-ap.md)
 owns helper processes, readiness, clients and recovery. Its
 [native recovery runtime](docs/native-recovery.md) replaces the remaining Python
 helper. [Rust firewall transactions](docs/native-firewall.md) now own NAT/DNS/DHCP
-rules. The native payload retains a Bash adapter for interface setup, forwarding
-sysctls and daemon launch.
+rules. [Rust network transactions](docs/native-network-state.md) now own AP setup,
+teardown and forwarding leases. The native payload retains a Bash adapter for
+interface allocation, NetworkManager unmanaged metadata and daemon launch.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 

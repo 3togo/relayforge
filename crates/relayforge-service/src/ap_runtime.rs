@@ -1,4 +1,5 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
+mod network;
 use crate::{
     ap_firewall::{Executor, Plan, Simulator},
     ap_process::{Birth, Handle},
@@ -285,8 +286,8 @@ impl Directory {
         Ok(names)
     }
 }
-struct FirewallLock(File);
-impl Drop for FirewallLock {
+struct TransactionLock(File);
+impl Drop for TransactionLock {
     fn drop(&mut self) {
         unsafe {
             libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
@@ -294,11 +295,14 @@ impl Drop for FirewallLock {
     }
 }
 impl Directory {
-    async fn firewall_lock(&self) -> Result<FirewallLock> {
+    async fn firewall_lock(&self) -> Result<TransactionLock> {
+        self.transaction_lock(c".firewall.lock").await
+    }
+    async fn transaction_lock(&self, name: &std::ffi::CStr) -> Result<TransactionLock> {
         let fd = unsafe {
             libc::openat(
                 self.fd.as_raw_fd(),
-                c".firewall.lock".as_ptr(),
+                name.as_ptr(),
                 libc::O_RDWR
                     | libc::O_CREAT
                     | libc::O_NOFOLLOW
@@ -308,30 +312,30 @@ impl Directory {
             )
         };
         if fd < 0 {
-            return Err("Cannot open firewall transaction lock");
+            return Err("Cannot open runtime transaction lock");
         }
         let file = unsafe { File::from_raw_fd(fd) };
         let m = file
             .metadata()
-            .map_err(|_| "Cannot inspect firewall transaction lock")?;
+            .map_err(|_| "Cannot inspect runtime transaction lock")?;
         if !m.is_file()
             || m.uid() != unsafe { libc::geteuid() }
             || m.nlink() != 1
             || m.mode() & 0o7777 != 0o600
         {
-            return Err("Unsafe firewall transaction lock");
+            return Err("Unsafe runtime transaction lock");
         }
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                return Ok(FirewallLock(file));
+                return Ok(TransactionLock(file));
             }
             let errno = std::io::Error::last_os_error().raw_os_error();
             if errno != Some(libc::EWOULDBLOCK) {
-                return Err("Cannot lock firewall transaction");
+                return Err("Cannot lock runtime transaction");
             }
             if Instant::now() >= deadline {
-                return Err("Firewall transaction still running; cleanup is unconfirmed");
+                return Err("Runtime transaction still running; cleanup is unconfirmed");
             }
             sleep(Duration::from_millis(20)).await;
         }
@@ -417,6 +421,20 @@ impl Executor for Firewall<'_> {
         )
         .await
         .map_err(|_| "Firewall command failed or timed out")
+    }
+}
+impl Directory {
+    fn remove(&self, name: &str, expected: &[u8]) -> Result<()> {
+        if self.read(name, true, LIMIT)?.as_deref() != Some(expected) {
+            return Err("Network journal changed externally");
+        }
+        let name = filename(name)?;
+        if unsafe { libc::unlinkat(self.fd.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+            return Err("Cannot remove network journal");
+        }
+        self.fd
+            .sync_all()
+            .map_err(|_| "Cannot sync network journal removal")
     }
 }
 fn filename(value: &str) -> Result<CString> {
@@ -949,8 +967,21 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             .map_err(|_| "Firewall cleanup deadline exceeded; snapshot retained")??;
             Ok(String::new())
         }
+        "interface-configure"
+        | "interface-remove"
+        | "forwarding-enable"
+        | "forwarding-release"
+        | "network-check"
+            if values.is_empty() =>
+        {
+            tokio::time::timeout(Duration::from_secs(12), network::run(p, &dir, action))
+                .await
+                .map_err(|_| "Network transaction timed out; journal retained")??;
+            Ok(String::new())
+        }
         "verify-cleanup" if values.is_empty() => {
             let (data, _) = snapshot(p, &dir)?;
+            network::run(p, &dir, "network-check").await?;
             for name in dir.entries()? {
                 if let Some(stem) = name.strip_suffix(".pid") {
                     if dir
