@@ -14,8 +14,9 @@ owns helper processes, readiness, clients and recovery. Its
 [native recovery runtime](docs/native-recovery.md) replaces the remaining Python
 helper. [Rust firewall transactions](docs/native-firewall.md) now own NAT/DNS/DHCP
 rules. [Rust network transactions](docs/native-network-state.md) now own AP setup,
-teardown and forwarding leases. The native payload retains a Bash adapter for
-interface allocation, NetworkManager unmanaged metadata and daemon launch.
+teardown and forwarding leases. [Rust device ownership](docs/native-device-ownership.md)
+now handles interface creation and NetworkManager release/restoration. The native
+payload retains a Bash adapter for daemon configuration/launch and optional modules.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 

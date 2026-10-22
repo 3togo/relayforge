@@ -89,13 +89,14 @@ journals, recovery and automatic resume policy.
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
    client reports, cancellation and owned recovery. The pinned Bash networking
-   adapter retains interface allocation, NetworkManager unmanaged metadata and
-   daemon operations; snapshot/child recovery, NAT/DNS/DHCP firewall transactions,
-   AP setup/teardown and shared forwarding leases are now Rust. See
+   adapter retains daemon configuration/launch and optional module loading;
+   snapshot/child recovery, NAT/DNS/DHCP firewall transactions, AP creation/setup/
+   teardown, NetworkManager managed-state handling and shared forwarding leases
+   are now Rust. See
    [create_ap supervision](native-create-ap.md) and [native recovery](native-recovery.md).
    Compatibility mode remains until
    feature parity is demonstrated. See [firewall extraction](native-firewall.md);
-   interface allocation and daemon launch/configuration remain shell extractions.
+   daemon launch/configuration remain shell extractions.
 6. A native service, bus activation and policy payload can now be staged for
    review. Distribution packages, deployed upgrade/rollback validation and
    additional service hardening remain pending. Physical DHCP, DNS, verified
@@ -120,4 +121,5 @@ validated. The laptop's existing Wi-Fi remains untouched by native activation.
 
 Native create_ap [network transactions](native-network-state.md) now own AP
 link/type/address setup, teardown and shared forwarding sysctl restoration.
-Interface allocation and NetworkManager unmanaged metadata remain in the adapter.
+[Rust device ownership](native-device-ownership.md) now handles interface creation
+and NetworkManager managed-state restoration; daemon operations remain in the adapter.

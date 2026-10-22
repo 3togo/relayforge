@@ -967,6 +967,16 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             .map_err(|_| "Firewall cleanup deadline exceeded; snapshot retained")??;
             Ok(String::new())
         }
+        "interface-create" | "device-fields" | "device-release" | "device-restore"
+            if values.is_empty() =>
+        {
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                network::device_action(p, &dir, action),
+            )
+            .await
+            .map_err(|_| "Device operation timed out; intent retained")?
+        }
         "interface-configure"
         | "interface-remove"
         | "forwarding-enable"

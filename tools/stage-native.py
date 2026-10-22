@@ -123,6 +123,53 @@ def native_engine(source):
     text=text.replace(power,'# Native setup preserves the parent station power-save setting.\n')
     if '/proc/sys/net/' in text:
         raise ValueError('Native adapter still accesses Bash sysctls')
+    # All allocation and unmanaged-device decisions belong to Rust in native mode.
+    section('alloc_new_iface() {\n','get_all_macaddrs() {\n','')
+    section('get_new_macaddr() {\n','# start haveged when needed\n','')
+    section('NETWORKMANAGER_CONF=/etc/NetworkManager/NetworkManager.conf\n','wait_for_ap() {\n','')
+    section('if [[ $FIX_UNMANAGED -eq 1 ]]; then\n','if [[ $DAEMONIZE -eq 1 && $RUNNING_AS_DAEMON -eq 0 ]]; then\n',
+            'if [[ $FIX_UNMANAGED -eq 1 ]]; then\n'
+            '    die "Global NetworkManager repair is unavailable in native mode."\nfi\n\n')
+    section('if [[ "$SHARE_METHOD" == "bridge" ]]; then\n    if is_bridge_interface $INTERNET_IFACE; then\n',
+            '# Native setup preserves the parent station power-save setting.\n',
+            'if [[ "$SHARE_METHOD" == "bridge" ]]; then die "Native bridge mode is unavailable."; fi\n\n')
+    # Preserve the read-only upstream channel synchronization before creating a child.
+    creation=text.index('if [[ $NO_VIRT -eq 0 ]]; then\n    VWIFI_IFACE=$(alloc_new_iface ap)\n')
+    begin=text.index('    if is_wifi_connected ${WIFI_IFACE}; then\n',creation)
+    end=text.index('\n\n    VIRTDIEMSG=',begin)
+    channel=text[begin:end]
+    section('if [[ $NO_VIRT -eq 0 ]]; then\n    VWIFI_IFACE=$(alloc_new_iface ap)\n',
+            'save_recovery_state || die "Could not record hotspot interface."\n',
+            'if [[ $NO_VIRT -eq 0 ]]; then\n'+channel+'\nfi\n'
+            'device_state=$("$RUNTIME_HELPER" --create-ap-runtime interface-create "$CONFDIR") || die\n'
+            'eval "$device_state"\n\n')
+    section('if networkmanager_exists && ! networkmanager_iface_is_unmanaged ${WIFI_IFACE}; then\n',
+            '[[ $HIDDEN -eq 1 ]]',
+            '"$RUNTIME_HELPER" --create-ap-runtime device-release "$CONFDIR" || die\n\n')
+    section('    if [[ $NO_VIRT -eq 0 && -n "$VWIFI_IFACE" ]]; then\n',
+            '    mutex_unlock\n    cleanup_lock\n',
+            '    "$RUNTIME_HELPER" --create-ap-runtime interface-remove "$CONFDIR" || failed=1\n'
+            '    "$RUNTIME_HELPER" --create-ap-runtime device-restore "$CONFDIR" || failed=1\n\n')
+    stop='    stop_recorded_children "$CONFDIR" || failed=1\n'
+    if text.count(stop)!=1:
+        raise ValueError('Pinned cleanup owner boundary changed')
+    text=text.replace(stop,stop+
+        '    local device_state\n'
+        '    device_state=$("$RUNTIME_HELPER" --create-ap-runtime device-fields "$CONFDIR") || { mutex_unlock; cleanup_lock; return 1; }\n'
+        '    eval "$device_state"\n')
+    section('        elif [[ "$SHARE_METHOD" == "bridge" ]]; then\n',
+            '    if [[ "$SHARE_METHOD" != "bridge" ]]; then\n',
+            '        elif [[ "$SHARE_METHOD" == "bridge" ]]; then\n'
+            '            failed=1 # Native mode never owns bridge resources.\n'
+            '        fi\n    fi\n\n')
+    section('\n    elif [[ "$SHARE_METHOD" == "bridge" ]]; then\n',
+            '    fi\nelse\n    echo "No Internet sharing"\n',
+            '\n    elif [[ "$SHARE_METHOD" == "bridge" ]]; then\n'
+            '        die "Native bridge mode is unavailable."\n')
+    section('    if networkmanager_is_running; then\n',
+            '    die\nfi\n\nclean_exit\n','')
+    if any(value in text for value in ('networkmanager_', 'alloc_new_iface', 'dealloc_iface', 'interface add', 'NetworkManager.conf')):
+        raise ValueError('Native adapter retains Bash device ownership operations')
     return text.encode('utf-8')
 
 

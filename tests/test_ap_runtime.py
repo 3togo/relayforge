@@ -334,9 +334,9 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
         (state/'net/demo0/ifindex').write_text('7\n')
         (state/'net/demo0/address').write_text('02:00:00:00:00:07\n')
         private(state/'network-state.json',dict(interfaces={
-            'demo0':dict(identity=dict(ifindex=7,mac='02:00:00:00:00:07'),kind='managed',up=True,connected=True,addresses=['192.0.2.10/24']),
-            'apfake0':dict(identity=dict(ifindex=101,mac='02:77:88:99:aa:bb'),kind='AP',up=False,connected=False,addresses=[])},
-            **{'global':0},forwarding=dict(all=0,default=0,demo0=0,apfake0=0)))
+            'demo0':dict(identity=dict(ifindex=7,mac='02:00:00:00:00:07'),kind='managed',up=True,connected=True,addresses=['192.0.2.10/24'])},
+            phys=dict(demo0=0),nm=dict(owner=':1.999',devices=dict(demo0=dict(path='/org/freedesktop/NetworkManager/Devices/7',managed=True,state=100,active=True))),
+            **{'global':0},forwarding=dict(all=0,default=0,demo0=0)))
         private(state/'firewall.json',dict(filter='',nat=''))
         private(state/'firewall-state.json',dict(rules=[dict(table='filter',chain='INPUT',args=['--comment','foreign-preserved','-j','ACCEPT'])]))
 
@@ -432,3 +432,20 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
                 self.assertEqual(final['forwarding'],dict(all=0,default=0,demo0=0))
                 self.assertEqual(final['interfaces']['demo0']['addresses'],['192.0.2.10/24'])
                 self.assertFalse((context.state/'engine/forwarding.json').exists())
+
+    def test_creation_and_nm_release_failures_clean_up_through_desktop_start(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply
+        for fault,index in [('lose_at',1),('fail_at',2),('lose_at',2)]:
+            with self.subTest(fault=fault,index=index),supervised_bench() as context:
+                self.prepare(context)
+                path=context.state/'network-state.json'
+                before=json.loads(path.read_text());data=dict(before);data[fault]=index;private(path,data)
+                with self.service(context) as (bus,_):
+                    self.assertFalse(decode_reply('Start',call(bus,'Start'))['success'])
+                    self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                    self.assertFalse((context.state/'create-ap.json').exists())
+                    final=json.loads(path.read_text())
+                    self.assertEqual(final['interfaces'],before['interfaces'])
+                    self.assertEqual(final['nm']['devices'],before['nm']['devices'])
+                    self.assertFalse(list((context.state/'engine').glob('create_ap.demo0.conf.*')))

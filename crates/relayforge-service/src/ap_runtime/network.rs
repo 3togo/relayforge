@@ -1,4 +1,5 @@
 //! Owned AP initialization/teardown and journalled forwarding leases.
+mod devices;
 use super::*;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -13,6 +14,9 @@ struct Netdev {
 #[serde(default, deny_unknown_fields)]
 struct Simulation {
     interfaces: BTreeMap<String, Netdev>,
+    phys: BTreeMap<String, u32>,
+    nm: Option<devices::SimManager>,
+    nm_bus: bool,
     global: u8,
     forwarding: BTreeMap<String, u8>,
     calls: Vec<Vec<String>>,
@@ -66,6 +70,133 @@ impl Kernel<'_> {
             return Err("Simulated network reply lost");
         }
         Ok(())
+    }
+    async fn phy(&self, name: &str) -> Result<u32> {
+        interface_name(name)?;
+        if self.p.fixture.is_some() {
+            return self
+                .simulation()?
+                .1
+                .phys
+                .get(name)
+                .copied()
+                .ok_or("Missing simulated radio identity");
+        }
+        let text = self.command("iw", &["dev", name, "info"]).await?;
+        Ok(relayforge_core::radio::device(&text, name)?.0)
+    }
+    async fn macs(&self) -> Result<Vec<String>> {
+        if self.p.fixture.is_some() {
+            return Ok(self
+                .simulation()?
+                .1
+                .interfaces
+                .values()
+                .map(|v| v.identity.mac.clone())
+                .collect());
+        }
+        let mut result = Vec::new();
+        for entry in fs::read_dir(&self.p.net).map_err(|_| "Cannot enumerate MAC addresses")? {
+            let entry = entry.map_err(|_| "Cannot inspect MAC address")?;
+            let mac = fs::read_to_string(entry.path().join("address"))
+                .map_err(|_| "Cannot read MAC address")?;
+            result.push(mac.trim().to_lowercase());
+            if result.len() > 128 {
+                return Err("Too many interfaces");
+            }
+        }
+        for line in self.command("iw", &["dev"]).await?.lines() {
+            if let Some(mac) = line.trim().strip_prefix("addr ") {
+                valid_mac(mac)?;
+                result.push(mac.to_lowercase());
+            }
+        }
+        Ok(result)
+    }
+    async fn create(&self, parent: &str, name: &str, mac: &str, phy: u32) -> Result<()> {
+        interface_name(parent)?;
+        interface_name(name)?;
+        valid_mac(mac)?;
+        if self.p.interface(name)?.is_some() {
+            return Err("AP name already exists");
+        }
+        if self.p.fixture.is_some() {
+            return self.simulate(
+                vec![
+                    "iw".into(),
+                    "dev".into(),
+                    parent.into(),
+                    "interface".into(),
+                    "add".into(),
+                    name.into(),
+                    "type".into(),
+                    "__ap".into(),
+                    "addr".into(),
+                    mac.into(),
+                ],
+                |s| {
+                    if s.interfaces.contains_key(name) {
+                        return Err("AP name collision");
+                    }
+                    let index = s
+                        .interfaces
+                        .values()
+                        .map(|v| v.identity.ifindex)
+                        .max()
+                        .unwrap_or(0)
+                        .checked_add(1)
+                        .ok_or("Interface index exhausted")?;
+                    s.interfaces.insert(
+                        name.into(),
+                        Netdev {
+                            identity: Interface {
+                                ifindex: index,
+                                mac: mac.into(),
+                            },
+                            kind: "AP".into(),
+                            up: false,
+                            connected: false,
+                            addresses: Vec::new(),
+                        },
+                    );
+                    s.phys.insert(name.into(), phy);
+                    s.forwarding
+                        .insert(name.into(), *s.forwarding.get("default").unwrap_or(&0));
+                    if let Some(nm) = &mut s.nm {
+                        if !nm.omit_created {
+                            nm.devices.insert(
+                                name.into(),
+                                devices::SimDevice {
+                                    path: format!(
+                                        "/org/freedesktop/NetworkManager/Devices/{index}"
+                                    ),
+                                    managed: true,
+                                    state: 30,
+                                    active: false,
+                                },
+                            );
+                        }
+                    }
+                    Ok(())
+                },
+            );
+        }
+        self.command(
+            "iw",
+            &[
+                "dev",
+                parent,
+                "interface",
+                "add",
+                name,
+                "type",
+                "__ap",
+                "addr",
+                mac,
+            ],
+        )
+        .await
+        .map(|_| ())
     }
     async fn command(&self, utility: &str, args: &[&str]) -> Result<String> {
         let path = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"]
@@ -191,6 +322,10 @@ impl Kernel<'_> {
                     if deleting {
                         s.interfaces.remove(name);
                         s.forwarding.remove(name);
+                        s.phys.remove(name);
+                        if let Some(nm) = &mut s.nm {
+                            nm.devices.remove(name);
+                        }
                     }
                     Ok(())
                 },
@@ -871,21 +1006,32 @@ async fn forwarding(p: &Platform, dir: &Directory, data: &Snapshot, operation: &
     }
     Ok(())
 }
+pub(super) async fn device_action(
+    p: &Platform,
+    dir: &Directory,
+    operation: &str,
+) -> Result<String> {
+    devices::action(p, dir, operation).await
+}
 pub(super) async fn run(p: &Platform, dir: &Directory, operation: &str) -> Result<()> {
-    let (data, _) = snapshot(p, dir)?;
+    let (mut data, bytes) = snapshot(p, dir)?;
     data.interfaces(p)?;
     match operation {
         "interface-configure" | "interface-remove" => {
             let _lock = dir.transaction_lock(c".network.lock").await?;
             if operation == "interface-configure" {
+                devices::require_release(p, dir, &data).await?;
                 configure(p, dir, &data).await
             } else {
+                devices::reconcile(p, dir, &mut data, &bytes).await?;
+                devices::permit_remove(p, dir, &data).await?;
                 remove(p, dir, &data).await
             }
         }
         "forwarding-enable" | "forwarding-release" | "network-check" => {
             let _lock = dir.transaction_lock(c".network.lock").await?;
             if operation == "network-check" {
+                devices::check(dir, &data)?;
                 if let Some(bytes) = dir.read("interface.json", true, LIMIT)? {
                     let intent: InterfaceIntent =
                         serde_json::from_slice(&bytes).map_err(|_| "Invalid interface journal")?;

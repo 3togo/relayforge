@@ -55,9 +55,9 @@ lock against administrator changes to kernel settings.
 
 ## Remaining Bash and validation boundary
 
-The generated adapter still allocates/creates virtual interfaces, handles
-NetworkManager unmanaged metadata, renders and launches hostapd/dnsmasq, and
-loads optional modules. Bridge sharing, band switching, COUNTRY overrides and
+[Rust device ownership](native-device-ownership.md) now allocates/creates virtual
+interfaces and releases/restores their NetworkManager managed state. The generated
+adapter still renders and launches hostapd/dnsmasq and loads optional modules. Bridge sharing, band switching, COUNTRY overrides and
 automatic resume remain unsupported in native create_ap mode. The immutable
 vendor snapshot and compatibility backend are unchanged.
 

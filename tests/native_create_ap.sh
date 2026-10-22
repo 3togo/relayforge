@@ -11,12 +11,19 @@ cleanup_owned() {
     runtime firewall-remove "$CONFDIR" || return 1
     runtime forwarding-release "$CONFDIR" || return 1
     runtime interface-remove "$CONFDIR" || return 1
+    runtime device-restore "$CONFDIR" || return 1
     runtime verify-cleanup "$CONFDIR" || return 1
     rm -rf -- "$CONFDIR"
     rm -f -- "$DAEMON_PIDFILE" "$DAEMON_PIDFILE.ready"
 }
 if [[ ${1-} == --rf-observe ]]; then
-    printf '%s\n' '{"interface":"apfake0","frequency":2412,"clients":[{"mac":"02:aa:bb:cc:dd:ee","ip":"192.0.2.2","hostname":"Rust client"}]}'
+    for record in "$root/engine"/create_ap.*.conf.*/recovery.json; do
+        [[ -f "$record" ]] || continue
+        state=$(runtime device-fields "${record%/*}") || exit 1
+        eval "$state"
+        printf '{"interface":"%s","frequency":2412,"clients":[{"mac":"02:aa:bb:cc:dd:ee","ip":"192.0.2.2","hostname":"Rust client"}]}\n' "$WIFI_IFACE"
+        break
+    done
     exit
 fi
 if [[ ${1-} == --recover ]]; then
@@ -44,16 +51,15 @@ mkdir -m 700 -p "$root/engine" "$COMMON_CONFDIR"
 mkdir -m 755 "$CONFDIR"
 printf '%s\n' "$$" > "$CONFDIR/pid"
 chmod 444 "$CONFDIR/pid"
-INTERNET_IFACE=$WIFI_IFACE VWIFI_IFACE=apfake0 BRIDGE_IFACE= OLD_MACADDR= NEW_MACADDR=02:77:88:99:aa:bb
+INTERNET_IFACE=$WIFI_IFACE VWIFI_IFACE= BRIDGE_IFACE= OLD_MACADDR= NEW_MACADDR=
 NO_VIRT=0 SHARE_METHOD=nat NO_DNS=0 DNS_PORT=5353 GATEWAY=192.168.12.1 RUNNING_AS_DAEMON=1
 ADDED_UNMANAGED= RULE_COMMENT="wifi-relay-${CONFDIR##*/}" BRIDGE_CREATED=0 PHYSICAL_CONFIGURED=0
-mkdir -p "$root/net/apfake0"
-printf '101\n' > "$root/net/apfake0/ifindex"
-printf '%s\n' "$NEW_MACADDR" > "$root/net/apfake0/address"
-WIFI_IFACE=$VWIFI_IFACE
 args=()
 for name in CONFDIR COMMON_CONFDIR WIFI_IFACE VWIFI_IFACE INTERNET_IFACE BRIDGE_IFACE OLD_MACADDR NEW_MACADDR NO_VIRT SHARE_METHOD NO_DNS DNS_PORT GATEWAY RUNNING_AS_DAEMON DAEMON_PIDFILE ADDED_UNMANAGED RULE_COMMENT BRIDGE_CREATED PHYSICAL_CONFIGURED; do args+=("$name=${!name}"); done
 runtime save "$CONFDIR" "$$" "${args[@]}"
+state=$(runtime interface-create "$CONFDIR")
+eval "$state"
+runtime device-release "$CONFDIR"
 runtime interface-configure "$CONFDIR"
 runtime forwarding-enable "$CONFDIR"
 for phase in nat dns dhcp; do runtime firewall-add "$CONFDIR" "$phase"; done
