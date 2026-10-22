@@ -54,7 +54,7 @@ def property_value(path,interface,name):
     if path==ROOT and name=='Capabilities':
         return GLib.Variant('au',[0x7001] if control.get('native') else [])
     if path==ROOT+'/Devices/1':
-        return {'State':GLib.Variant('u',100),'ActiveConnection':GLib.Variant('o',ROOT+'/ActiveConnection/1'),
+        return {'State':GLib.Variant('u',30 if control.get('upstream_missing') else 100),'ActiveConnection':GLib.Variant('o',ROOT+'/ActiveConnection/1'),
                 'WirelessCapabilities':GLib.Variant('u',0 if control.get('no_ap') else 0x40)}[name]
     if path==ROOT+'/ActiveConnection/1':
         return {'State':GLib.Variant('u',2),'Uuid':GLib.Variant('s','22222222-2222-4222-a222-222222222222' if control.get('upstream_changed') else '11111111-1111-4111-a111-111111111111')}[name]
@@ -84,11 +84,11 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             request=json.loads(args[0]);iface=request.get('interface')
             if method=='Radio':
                 result=dict(CAPTURE)
-                if control.get('upstream_changed'):
+                if control.get('upstream_changed') or control.get('roamed'):
                     result['link']=result['link'].replace('2412','2437')
             elif method=='Identity':
                 if iface==CAPTURE['wifi_iface']:
-                    result=dict(ifindex=7,mac='02:11:22:33:44:55',phy=0)
+                    result=dict(ifindex=8 if control.get('parent_replaced') else 7,mac='02:11:22:33:44:55',phy=0)
                 else:
                     result=state['interfaces'].get(iface)
                     if result and control.get('tamper_interface'):
@@ -121,7 +121,7 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             elif method=='VerifyAp':
                 if control.get('bad_ap'):
                     raise ValueError('Wrong AP channel')
-                assert iface in state['interfaces'] and request['frequency']==2412
+                assert iface in state['interfaces'] and request['frequency']==(2437 if control.get('roamed') else 2412)
                 result=None
             elif method=='Clients':
                 result=[dict(mac='02:aa:bb:cc:dd:ee',ip='192.0.2.2',hostname='')] if control.get('client') else []
@@ -162,7 +162,7 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             assert options=={'persist':'volatile','bind-activation':'dbus-client'}
             assert settings['connection']['autoconnect'] is False
             assert settings['802-11-wireless']['mode']=='ap'
-            assert settings['802-11-wireless']['channel']==1
+            assert settings['802-11-wireless']['channel']==(6 if control.get('roamed') else 1)
             assert settings['802-11-wireless-security']['psk-flags']==2
             assert settings['802-11-wireless-security']['proto']==['rsn']
             assert settings['802-11-wireless-security']['pairwise']==['ccmp']

@@ -68,8 +68,8 @@ Monitoring checks process identity, AP channel and upstream identity. Unexpected
 exit or drift triggers owned cleanup and reports failure. SIGTERM performs
 cleanup; restart after supervisor death recovers the pending journal before
 exposing desktop methods. Unconfirmed cleanup retains the journal and private
-configuration and prevents a successful restart. Automatic resume and suspend
-recovery are not implemented.
+configuration and prevents a successful restart. [Native suspend/resume](native-suspend.md) retains an authorized request through
+logind sleep and waits for its original upstream before recovery.
 
 Band-switch requests return `success: false` without changing sharing. Selecting
 another backend through SetConfig returns InvalidArgs in a fixed native mode.

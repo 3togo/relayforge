@@ -94,8 +94,9 @@ reviewed payload and configuration backup available for rollback. No live
 upgrade, installation or rollback was performed here.
 
 Native mode still declines upstream band switching, bridge mode and COUNTRY
-overrides. Automatic resume, suspend recovery and the old supervisor's additional
-firewalld workaround remain unimplemented. Physical activation, driver behavior,
+overrides. [Native suspend/resume](native-suspend.md) now coordinates owned cleanup and
+recovery of a prior authorized request. The old supervisor's additional firewalld
+workaround remains unimplemented. Physical activation, driver behavior,
 DHCP/DNS/NAT connectivity and deployment remain separate hardware gates.
 
 ## Isolated tests

@@ -24,7 +24,8 @@ signals and housekeeping; native staging includes an ELF helper instead of Bash.
 The [backend audit](docs/backend-audit.md) adds connected-subnet collision checks
 and durable recovery from interrupted final cleanup. Its
 [validation report](docs/backend-audit-validation.md) records the exact candidate
-and offline results.
+and offline results. [Native suspend/resume](docs/native-suspend.md) now coordinates
+logind sleep, owned cleanup and recovery of a prior authorized sharing request.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 

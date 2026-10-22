@@ -13,3 +13,4 @@ tokio.workspace = true
 zbus.workspace = true
 libc = "0.2"
 sha2 = "=0.10.9"
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }

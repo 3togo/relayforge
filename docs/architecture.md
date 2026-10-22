@@ -79,8 +79,8 @@ journals, recovery and automatic resume policy.
    regulatory preflight. The pinned compatibility engine remains unchanged;
    native mode does not import its developer probe.
 3. Completed for native mode: ownership intent journals, interface identity
-   checks, cancellation, crash cleanup and retry after uncertain cleanup. Native
-   automatic resume and sleep recovery remain future work.
+   checks, cancellation, crash cleanup and retry after uncertain cleanup. [Native suspend/resume](native-suspend.md) now retains a prior authorized request
+   through logind sleep; live sleep validation remains pending.
 4. Completed as an opt-in mode: native Rust NetworkManager control using volatile
    profiles and client-bound activation. Both NM-owned child interfaces and
    Rust-controlled iw helpers are covered by simulated fault tests. These tests

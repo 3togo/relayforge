@@ -131,8 +131,8 @@ identities, modified profile ownership, shutdown and cleanup retry. Journal and
 staging tests cover filesystem boundaries. The test suite does not prove real
 NetworkManager activation, driver behavior, DHCP/DNS/NAT connectivity, sleep/resume
 or distro installation. Physical activation remains deferred to preserve the
-current Wi-Fi connection. Automatic resume and seamless backend-mode switching
-remain future work.
+current Wi-Fi connection. [Native suspend/resume](native-suspend.md) now supports a prior authorized request;
+seamless backend-mode switching remains future work.
 
 References: [NM activation API](https://networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html),
 [NM connection settings](https://networkmanager.dev/docs/api/latest/settings-connection.html),

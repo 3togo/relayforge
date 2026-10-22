@@ -57,7 +57,7 @@ These controls exist only on the explicit ordinary-user fixture platform.
 | Historical helper recovery | Exact argv/birth checks and explicit old-helper support retained; no raw-PID or global orphan adoption |
 | Upstream/regulatory changes | Bridge mode, band switching, regulatory overrides and active-parent reuse remain conservative refusals |
 | Kernel helpers/firewall policy | No automatic PPTP module loading or global firewalld-policy rewrite; distribution policy integration remains pending |
-| Automatic resume | Native automatic resume and suspend/resume feature parity remain unimplemented; this audit does not add implicit reconnection |
+| Automatic resume | [Native suspend/resume](native-suspend.md) now retains an authorized request through logind sleep; live hardware validation remains pending |
 | Configuration migration | Fresh credentials are random; explicit existing credentials are required. Legacy factory-password rotation and installer repair hooks remain separate work |
 | Publication residue | Unpublished private pending directories have no networking resources; they remain unadopted and may require administrative review |
 | Hardware and deployment | Live driver/control-socket behavior, dnsmasq privilege dropping, mandatory access control, DHCP/DNS/NAT, desktop authorization, install/upgrade/rollback and multiple-driver checks remain gates |

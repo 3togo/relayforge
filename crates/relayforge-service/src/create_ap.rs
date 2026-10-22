@@ -699,7 +699,12 @@ impl Backend {
         session.status.client_count = clients.as_array().unwrap().len() as u32;
         Ok(clients)
     }
-    pub async fn start(&self, config: &Config, mut cancelled: watch::Receiver<u64>) -> Value {
+    pub async fn start(
+        &self,
+        config: &Config,
+        mut cancelled: watch::Receiver<u64>,
+        expected: Option<&crate::networkmanager::Upstream>,
+    ) -> Value {
         if config.get("BACKEND").map(String::as_str) != Some("create_ap") {
             return json!({"success":false,"error":"Native create_ap mode requires BACKEND=create_ap"});
         }
@@ -716,7 +721,17 @@ impl Backend {
         }
         let gate_cancelled = cancelled.clone();
         let prepare = async {
+            if let Some(expected) = expected {
+                let fresh =
+                    crate::networkmanager::resume_probe(self.platform.fixture, config).await?;
+                if *expected != fresh {
+                    return Err("Original upstream changed before resume");
+                }
+            }
             let snapshot = self.platform.radio(&config["WIFI_IFACE"]).await?;
+            if expected.is_some_and(|expected| !expected.matches_radio(&snapshot)) {
+                return Err("Original upstream changed during resume preflight");
+            }
             let plan = snapshot.preflight(config)?;
             if config["SHARE_METHOD"] == "bridge" {
                 return Err("Native create_ap declines bridge mode because it reconfigures the upstream interface");

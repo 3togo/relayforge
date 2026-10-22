@@ -463,13 +463,60 @@ impl Platform {
         Ok(json!(clients))
     }
 }
-#[derive(PartialEq)]
-struct Upstream {
+#[derive(Clone, PartialEq)]
+pub(crate) struct Upstream {
     uuid: String,
     ssid: String,
     bssid: String,
     frequency: u32,
     identity: Identity,
+}
+impl Upstream {
+    #[cfg(test)]
+    pub(crate) fn test_connection(frequency: u32) -> Self {
+        Self {
+            uuid: "original-profile".into(),
+            ssid: "upstream".into(),
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            frequency,
+            identity: Identity {
+                ifindex: 7,
+                mac: "02:00:00:00:00:07".into(),
+                phy: 0,
+            },
+        }
+    }
+
+    pub(crate) fn matches_radio(&self, snapshot: &Snapshot) -> bool {
+        self.identity.phy == snapshot.phy
+            && self.ssid == snapshot.capabilities.current_sta_ssid
+            && self.bssid == snapshot.capabilities.current_sta_bssid
+            && self.frequency == snapshot.capabilities.current_sta_frequency
+    }
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        self.uuid == other.uuid
+            && self.ssid == other.ssid
+            && self.identity == other.identity
+            && !self.uuid.is_empty()
+            && !self.ssid.is_empty()
+            && !other.bssid.is_empty()
+            && other.frequency != 0
+    }
+}
+pub(crate) async fn resume_probe(fixture: bool, config: &Config) -> Result<Upstream> {
+    let bus = Bus::open(fixture).await?;
+    let result = async {
+        let (observed, snapshot) =
+            upstream(&bus, &Platform { fixture }, &config["WIFI_IFACE"]).await?;
+        snapshot.preflight(config)?;
+        if !observed.same_connection(&observed) {
+            return Err("Original Wi-Fi association is unavailable");
+        }
+        Ok(observed)
+    }
+    .await;
+    bus.close().await;
+    result
 }
 async fn upstream(bus: &Bus, platform: &Platform, iface: &str) -> Result<(Upstream, Snapshot)> {
     let device = bus.device(iface).await?;
@@ -808,7 +855,12 @@ impl Backend {
         }
         Ok(())
     }
-    pub async fn start(&self, config: &Config, mut cancelled: watch::Receiver<u64>) -> Json {
+    pub async fn start(
+        &self,
+        config: &Config,
+        mut cancelled: watch::Receiver<u64>,
+        expected: Option<&Upstream>,
+    ) -> Json {
         if config.get("BACKEND").map(String::as_str) != Some("networkmanager") {
             return json!({"success":false,"error":"Native mode requires BACKEND=networkmanager"});
         }
@@ -831,6 +883,9 @@ impl Backend {
             let (baseline, snapshot) =
                 upstream(&bus, &self.platform, &config["WIFI_IFACE"]).await?;
             snapshot.preflight(config)?;
+            if expected.is_some_and(|expected| *expected != baseline) {
+                return Err("Original upstream changed before resume");
+            }
             let caps: Vec<u32> = bus.property(ROOT, NM, "Capabilities").await?;
             let owned = Owned::new(
                 &config["WIFI_IFACE"],

@@ -8,6 +8,7 @@ mod inventory;
 mod native_backend;
 mod networkmanager;
 mod nm_journal;
+mod power;
 mod radio;
 use backend::Worker;
 use relayforge_core::{
@@ -36,6 +37,8 @@ struct Service {
     config_users: tokio::sync::RwLock<()>,
     radio: radio::Source,
     cancellation: tokio::sync::watch::Sender<u64>,
+    power: Mutex<power::State>,
+    fixture: bool,
     demo: bool,
     demo_deny: bool,
     use_polkit: bool,
@@ -123,6 +126,9 @@ impl Service {
         params: Value,
         connection: &Connection,
     ) -> fdo::Result<Value> {
+        if method == Method::Stop {
+            self.power.lock().unwrap().cancel();
+        }
         let permits = if method == Method::Stop {
             &self.stop_requests
         } else {
@@ -154,6 +160,11 @@ impl Service {
             None
         };
         if self.native.is_some() {
+            if method == Method::Start && self.power.lock().unwrap().blocked() {
+                return Ok(
+                    json!({"success":false,"error":"Sharing is suspended or sleep cleanup is pending"}),
+                );
+            }
             match method {
                 Method::SwitchBandAndReconnect => {
                     return Ok(
@@ -175,7 +186,11 @@ impl Service {
                 return Ok(json!(snapshot.capabilities));
             }
             Method::GetConfig => return self.load_config().await.map(|config| json!(config)),
-            Method::SetConfig => return self.save_config(params).await.map(|_| json!(true)),
+            Method::SetConfig => {
+                self.save_config(params).await?;
+                self.emit_status(connection).await;
+                return Ok(json!(true));
+            }
             Method::GetInterfaces => {
                 if self.demo {
                     return Ok(
@@ -206,6 +221,11 @@ impl Service {
         };
         let mut cancelled = self.cancellation.subscribe();
         let mut startup_config = None;
+        let mut resume_guard = None;
+        if method == Method::Start && !was_active {
+            self.power.lock().unwrap().cancel();
+        }
+        let power_revision = self.power.lock().unwrap().revision;
         if method == Method::Start {
             // Credentials and radio permissions must be fresh at every startup.
             let config = match self.load_config().await {
@@ -240,12 +260,22 @@ impl Service {
                     return Ok(json!({"success":false,"error":error}));
                 }
             }
+            if self.native.is_some() && !was_active && self.power.lock().unwrap().available {
+                resume_guard = tokio::select! {
+                    result = timeout(Duration::from_secs(8), networkmanager::resume_probe(self.fixture, &config)) => result.ok().and_then(Result::ok),
+                    _ = cancelled.changed() => return Ok(json!({"success":false,"error":"Startup cancelled"})),
+                };
+            }
             startup_config = Some(config);
+        }
+        if method == Method::Start && self.power.lock().unwrap().blocked() {
+            self.core.lock().unwrap().complete(method, epoch, false);
+            return Ok(json!({"success":false,"error":"Startup cancelled for sleep"}));
         }
         let result = if let Some(native) = &self.native {
             match method {
                 Method::Start => Ok(native
-                    .start(startup_config.as_ref().unwrap(), cancelled)
+                    .start(startup_config.as_ref().unwrap(), cancelled, None)
                     .await),
                 Method::Stop => Ok(json!(native.stop().await)),
                 _ => Err("Unsupported native operation".into()),
@@ -276,6 +306,29 @@ impl Service {
                     if self.native.is_some() && !success && core.is_current(epoch) {
                         if let Some(error) = value.get("error").and_then(Value::as_str) {
                             core.status.error = Some(error.into());
+                        }
+                    }
+                }
+                if method == Method::Start && success {
+                    if let Some(original) = resume_guard {
+                        // Arm only if the connection is still exactly the one authorized
+                        // before startup; failed observations never grant resume intent.
+                        if let Ok(Ok(fresh)) = timeout(
+                            Duration::from_secs(8),
+                            networkmanager::resume_probe(
+                                self.fixture,
+                                startup_config.as_ref().unwrap(),
+                            ),
+                        )
+                        .await
+                        {
+                            if fresh == original && self.core.lock().unwrap().is_current(epoch) {
+                                self.power.lock().unwrap().arm(
+                                    startup_config.as_ref().unwrap().clone(),
+                                    original,
+                                    power_revision,
+                                );
+                            }
                         }
                     }
                 }
@@ -373,11 +426,20 @@ impl Service {
                 }
             }
         }
+        let changed = current != merged;
         let store = self.configuration.clone();
         tokio::task::spawn_blocking(move || store.lock().unwrap().save(&patch, switching))
             .await
             .map_err(|_| fdo::Error::Failed("Configuration save task failed".into()))?
-            .map_err(|error| fdo::Error::Failed(error.into()))
+            .map_err(|error| fdo::Error::Failed(error.into()))?;
+        if changed {
+            self.power.lock().unwrap().cancel();
+            let mut core = self.core.lock().unwrap();
+            if !core.status.active {
+                core.status.desired_active = false;
+            }
+        }
+        Ok(())
     }
 
     async fn demo(
@@ -825,6 +887,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_users: tokio::sync::RwLock::new(()),
         radio,
         cancellation: cancellation.clone(),
+        power: Mutex::new(power::State::default()),
+        fixture,
         demo,
         demo_deny: deny,
         use_polkit,
@@ -837,6 +901,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .object_server()
         .remove::<Initializing, _>(OBJECT_PATH)
         .await?;
+    let power_task = if native_mode {
+        Some(tokio::spawn(power::run(connection.clone())))
+    } else {
+        None
+    };
     let native_monitor = native.clone().map(|backend| {
         let core = core.clone();
         let clients = clients.clone();
@@ -844,8 +913,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
+                let interface = match connection
+                    .object_server()
+                    .interface::<_, Service>(OBJECT_PATH)
+                    .await
+                {
+                    Ok(interface) => interface,
+                    Err(_) => return,
+                };
+                let service = interface.get().await;
+                if service.power.lock().unwrap().owns_status() {
+                    continue;
+                }
                 let epoch = core.lock().unwrap().epoch();
                 if let Some((status, observed)) = backend.poll().await {
+                    if service.power.lock().unwrap().owns_status() {
+                        continue;
+                    }
+                    if !status.active {
+                        service.power.lock().unwrap().cancel();
+                    }
                     let body = {
                         let mut core = core.lock().unwrap();
                         if !core.is_current(epoch) {
@@ -950,6 +1037,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! { _=tokio::signal::ctrl_c()=>{}, _=terminate.recv()=>{} }
     cancellation.send_modify(|revision| *revision = revision.wrapping_add(1));
+    if let Some(task) = power_task {
+        task.abort();
+        let _ = task.await;
+    }
     if let Some(task) = native_monitor {
         task.abort();
         let _ = task.await;

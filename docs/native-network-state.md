@@ -60,7 +60,9 @@ interfaces and releases/restores their NetworkManager managed state. The generat
 adapter retains option parsing, compatibility checks, instance markers and optional
 modules. [Rust daemon supervision](native-daemons.md) now renders and launches
 hostapd/dnsmasq. Bridge sharing, band switching, COUNTRY overrides and
-automatic resume remain unsupported in native create_ap mode. The immutable
+automatic upstream reconnection remain unsupported in native create_ap mode.
+[Native sleep recovery](native-suspend.md) can restore previously authorized sharing
+only after the original upstream returns. The immutable
 vendor snapshot and compatibility backend are unchanged.
 
 The generator checks the pinned source hash and extraction boundaries. Its

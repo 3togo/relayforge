@@ -21,10 +21,15 @@ impl Backend {
             Self::CreateAp(b) => b.recover().await,
         }
     }
-    pub async fn start(&self, c: &Config, cancel: watch::Receiver<u64>) -> Value {
+    pub async fn start(
+        &self,
+        c: &Config,
+        cancel: watch::Receiver<u64>,
+        expected: Option<&networkmanager::Upstream>,
+    ) -> Value {
         match self {
-            Self::NetworkManager(b) => b.start(c, cancel).await,
-            Self::CreateAp(b) => b.start(c, cancel).await,
+            Self::NetworkManager(b) => b.start(c, cancel, expected).await,
+            Self::CreateAp(b) => b.start(c, cancel, expected).await,
         }
     }
     pub async fn stop(&self) -> bool {
