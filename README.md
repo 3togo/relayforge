@@ -128,7 +128,9 @@ exact candidate, optimized executable and remote checks. The subsequent
 [native recovery validation](docs/native-recovery-validation.md) records removal
 of the Python helper from the native payload and its process/filesystem checks.
 The [firewall extraction report](docs/native-firewall-validation.md) records the
-subsequent NAT/DNS/DHCP rule migration and failure-injection checks.
+subsequent NAT/DNS/DHCP rule migration and failure-injection checks. The
+[AP setup and forwarding report](docs/native-network-state-validation.md) records
+the next Rust extraction and its interrupted-transaction and desktop checks.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
