@@ -69,6 +69,17 @@ SSID/interface arguments set fresh-install values only; no password is printed.
 networking. GTK controls can connect with the private-bus environment from the
 previous example.
 
+Read-only checks against a physical adapter are also available:
+
+```sh
+./target/release/relayforge-service --inspect-radio wlp2s0
+./target/release/relayforge-service --preflight-radio /absolute/private/directory/hotspot.conf
+```
+
+These commands exit without opening D-Bus or starting the networking worker.
+Preflight reports a plan; it does not activate sharing or switch the upstream
+connection. See [native radio diagnostics](docs/native-radio.md) for limitations.
+
 ## Compatibility and deployment boundary
 
 The service preserves `io.github.erhanzeyrek.WifiHotspot`, its object path, all ten

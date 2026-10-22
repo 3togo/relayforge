@@ -532,6 +532,30 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Diagnostic modes return before bus registration or worker construction.
+    // They run read-only iw inspection and never apply a startup plan.
+    if let [mode, target] = args.as_slice() {
+        if mode == "--inspect-radio" {
+            let snapshot = radio::Source::System.inspect(target).await?;
+            println!("{}", serde_json::to_string(&snapshot.capabilities)?);
+            return Ok(());
+        }
+        if mode == "--preflight-radio" {
+            // SAFETY: geteuid has no preconditions.
+            let config = config_store::Store::Disk(config_store::ConfigFile::open(
+                Path::new(target),
+                unsafe { libc::geteuid() },
+            )?)
+            .load()?;
+            let snapshot = radio::Source::System.inspect(&config["WIFI_IFACE"]).await?;
+            let result = match snapshot.preflight(&config) {
+                Ok(plan) => json!({"success":true,"plan":plan}),
+                Err(error) => json!({"success":false,"error":error}),
+            };
+            println!("{result}");
+            return Ok(());
+        }
+    }
     if args.first().map(String::as_str) == Some("--init-config") {
         let path = args
             .get(1)
@@ -569,7 +593,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
         [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
-        _=>return Err("Usage: relayforge-service --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
+        _=>return Err("Usage: relayforge-service --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
     };
     let radio = if args.first().map(String::as_str) == Some("--demo-radio") {
         use std::io::Read;

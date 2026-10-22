@@ -104,3 +104,24 @@ class RadioParityTests(unittest.TestCase):
             record[key] = text
             records.append(record)
         self.assertTrue(all(not r['valid'] for r in native(records)))
+
+
+class RadioDiagnosticTests(unittest.TestCase):
+    def test_inspection_rejects_option_like_adapter_without_registering_a_service(self):
+        binary = Path(os.environ.get('RELAYFORGE_BINARY', ROOT / 'target/debug/relayforge-service'))
+        result = subprocess.run([str(binary), '--inspect-radio', '--help'], capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b'')
+        self.assertIn(b'Invalid configuration', result.stderr)
+
+    def test_preflight_requires_private_configuration_before_inspection(self):
+        import tempfile
+        binary = Path(os.environ.get('RELAYFORGE_BINARY', ROOT / 'target/debug/relayforge-service'))
+        with tempfile.TemporaryDirectory(prefix='relayforge-diagnostic-') as directory:
+            path = Path(directory) / 'config'
+            path.write_text('PASSPHRASE=private-test-password\nWIFI_IFACE=demo0\n')
+            path.chmod(0o644)
+            result = subprocess.run([str(binary), '--preflight-radio', str(path)], capture_output=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b'')
+            self.assertNotIn(b'private-test-password', result.stderr)

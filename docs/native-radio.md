@@ -59,3 +59,13 @@ bus. No physical Wi-Fi or firewall changes are part of these tests.
 
 The command interface is documented by the
 [Linux wireless iw documentation](https://wireless.docs.kernel.org/en/latest/en/users/documentation/iw.html).
+
+For non-disruptive physical diagnostics, `--inspect-radio IFACE` prints live
+capabilities using read-only iw commands. `--preflight-radio /absolute/config`
+loads an operator-owned private configuration and prints either a Start plan or
+`success: false` with its rejection reason. Both modes exit before opening D-Bus
+or constructing the networking worker. A successful plan with
+`switch_upstream: true` requires changing the upstream connection if executed;
+the diagnostic never applies it. These modes do not install configuration or
+replace the running service. Treat their raw capability output as private because
+it includes the upstream SSID and BSSID.
