@@ -127,7 +127,19 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
                 result=[dict(mac='02:aa:bb:cc:dd:ee',ip='192.0.2.2',hostname='')] if control.get('client') else []
             else:
                 raise ValueError('Unknown test operation')
-            invocation.return_value(GLib.Variant('(s)',(json.dumps(result),)))
+            reply=GLib.Variant('(s)',(json.dumps(result),))
+            if method=='Radio':
+                event('radio-read')
+                foreign_probe=bool(state['profiles']) and all(record['sender']!=sender for record in state['profiles'].values())
+                if control.get('hold_radio') or (control.get('hold_post_start_probe') and foreign_probe):
+                    event('radio-held')
+                    def finish():
+                        fields=CONTROL()
+                        if fields.get('hold_radio') or (fields.get('hold_post_start_probe') and foreign_probe):return True
+                        invocation.return_value(reply);return False
+                    GLib.timeout_add(20,finish)
+                    return
+            invocation.return_value(reply)
         elif method=='GetDeviceByIpIface':
             iface=args[0]
             if iface==CAPTURE['wifi_iface']:

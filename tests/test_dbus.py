@@ -84,7 +84,7 @@ def running(mode='--demo', *arguments):
 
 
 @contextlib.contextmanager
-def fake_polkit(allowed=True):
+def fake_polkit(allowed=True, pending=None):
     bus = connect()
     xml = '''<node><interface name="org.freedesktop.PolicyKit1.Authority">
       <method name="CheckAuthorization">
@@ -95,6 +95,9 @@ def fake_polkit(allowed=True):
     observed = []
     def check(_bus, _sender, _path, _iface, _method, params, invocation):
         observed.append(params.unpack())
+        if pending is not None and len(observed)==1:
+            pending.append(invocation)
+            return
         invocation.return_value(GLib.Variant('((bba{ss}))', ((allowed, False, {}),)))
     registration = bus.register_object('/org/freedesktop/PolicyKit1/Authority',
                                        Gio.DBusNodeInfo.new_for_xml(xml).interfaces[0], check, None, None)

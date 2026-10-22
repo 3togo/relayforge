@@ -4,8 +4,8 @@ use crate::{
     Service,
 };
 use futures_util::StreamExt;
-use relayforge_core::{config::Config, Method, BUS_NAME, OBJECT_PATH};
-use serde_json::json;
+use relayforge_core::{config::Config, Lifecycle, Method, Status, OBJECT_PATH};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use zbus::{zvariant::OwnedFd, Connection, Proxy};
@@ -19,6 +19,8 @@ const SETTLE: Duration = Duration::from_secs(4);
 pub(crate) struct State {
     pub available: bool,
     pub sleeping: bool,
+    inhibited: bool,
+    sleep_generation: u64,
     pub revision: u64,
     intent: Option<(Config, Upstream)>,
     waiting: bool,
@@ -38,7 +40,7 @@ impl State {
         self.attempts = 0;
     }
     pub fn blocked(&self) -> bool {
-        self.sleeping || self.cleanup
+        self.sleeping || self.cleanup || (self.available && !self.inhibited)
     }
     pub fn owns_status(&self) -> bool {
         self.blocked() || self.waiting
@@ -55,6 +57,8 @@ impl State {
         }
         self.revision = self.revision.wrapping_add(1);
         self.sleeping = sleeping;
+        self.sleep_generation = self.sleep_generation.wrapping_add(1);
+        self.inhibited = false;
         self.announce = true;
         self.candidate = None;
         self.after = Some(Instant::now() + SETTLE);
@@ -62,6 +66,30 @@ impl State {
             self.cleanup = true;
             self.waiting = self.intent.is_some();
         }
+    }
+    fn acquired(&mut self, generation: u64) {
+        if self.available && !self.sleeping && self.sleep_generation == generation {
+            self.inhibited = true;
+        }
+    }
+    pub(crate) fn observe(
+        &mut self,
+        core: &mut Lifecycle,
+        epoch: u64,
+        status: Status,
+        clients: &mut Value,
+        observed: Value,
+    ) -> Option<bool> {
+        if self.owns_status() || !core.is_current(epoch) {
+            return None;
+        }
+        if !status.active {
+            self.cancel();
+        }
+        let _ = core.observe(json!(status));
+        let changed = *clients != observed;
+        *clients = observed;
+        Some(changed)
     }
     fn stable(&mut self, observed: Upstream, now: Instant) -> Option<Upstream> {
         if self.blocked() || !self.waiting || self.after.is_some_and(|after| now < after) {
@@ -114,18 +142,12 @@ impl Service {
             }
             .into();
             core.status.error = error.map(str::to_owned);
+            if clean {
+                *self.clients.lock().unwrap() = json!([]);
+            }
         }
         if clean {
-            *self.clients.lock().unwrap() = json!([]);
-            let _ = connection
-                .emit_signal(
-                    None::<&str>,
-                    OBJECT_PATH,
-                    BUS_NAME,
-                    "ClientsChanged",
-                    &("[]",),
-                )
-                .await;
+            self.emit_clients(connection).await;
         }
         self.emit_status(connection).await;
     }
@@ -253,6 +275,16 @@ impl Service {
         let Some(expected) = expected else {
             return;
         };
+        // The probe can await several bus round trips. External configuration
+        // edits during that observation must revoke the frozen request too.
+        if self.load_config().await.ok().as_ref() != Some(&config) {
+            let mut power = self.power.lock().unwrap();
+            if power.revision == revision {
+                power.cancel();
+                power.announce = true;
+            }
+            return;
+        }
         let epoch = {
             let power = self.power.lock().unwrap();
             if power.revision != revision || power.blocked() {
@@ -305,7 +337,7 @@ impl Service {
 
 /// A unique-owner proxy excludes forged PrepareForSleep signals. The delay FD is
 /// retained until owned cleanup succeeds (or logind's configured deadline expires).
-pub(crate) async fn run(connection: Connection) {
+pub(crate) async fn run(connection: Connection, mut initial: Option<Monitor>) {
     let interface = match connection
         .object_server()
         .interface::<_, Service>(OBJECT_PATH)
@@ -316,11 +348,12 @@ pub(crate) async fn run(connection: Connection) {
     };
     let service = interface.get().await;
     loop {
-        let _ = monitor(&connection, &service).await;
+        let _ = monitor(&connection, &service, initial.take()).await;
         {
             let mut power = service.power.lock().unwrap();
             let monitored = power.available;
             power.available = false;
+            power.inhibited = false;
             power.cancel();
             // Losing logind invalidates the old intent and cancels in-flight resume.
             if monitored {
@@ -330,7 +363,8 @@ pub(crate) async fn run(connection: Connection) {
                     .send_modify(|revision| *revision = revision.wrapping_add(1));
                 eprintln!("Sleep monitoring lost; automatic resume cancelled");
             }
-            power.sleeping = false;
+            // Keep a known sleep gate until a trusted awake snapshot returns.
+            // Losing the monitor is not evidence that the machine woke up.
         }
         for _ in 0..10 {
             service.power_tick(&connection).await;
@@ -339,69 +373,119 @@ pub(crate) async fn run(connection: Connection) {
     }
 }
 
-async fn monitor(connection: &Connection, service: &Service) -> Result<(), ()> {
-    let dbus = zbus::fdo::DBusProxy::new(connection)
-        .await
-        .map_err(|_| ())?;
-    let owner = timeout(
-        Duration::from_secs(3),
-        dbus.get_name_owner(LOGIN.try_into().unwrap()),
-    )
-    .await
-    .map_err(|_| ())?
-    .map_err(|_| ())?;
-    let proxy = Proxy::new(connection, owner.as_str(), PATH, MANAGER)
-        .await
-        .map_err(|_| ())?;
-    let mut signals = proxy
-        .receive_signal("PrepareForSleep")
-        .await
-        .map_err(|_| ())?;
-    let mut inhibitor: Option<OwnedFd> = Some(
-        timeout(
+impl Monitor {
+    async fn connect(connection: &Connection) -> Result<Self, ()> {
+        let dbus = zbus::fdo::DBusProxy::new(connection)
+            .await
+            .map_err(|_| ())?;
+        let owner = timeout(
             Duration::from_secs(3),
-            proxy.call(
-                "Inhibit",
-                &(
-                    "sleep",
-                    "RelayForge",
-                    "Clean up owned hotspot before sleep",
-                    "delay",
-                ),
-            ),
+            dbus.get_name_owner(LOGIN.try_into().unwrap()),
         )
         .await
         .map_err(|_| ())?
-        .map_err(|_| ())?,
-    );
-    let properties = Proxy::new(
-        connection,
-        owner.as_str(),
-        PATH,
-        "org.freedesktop.DBus.Properties",
-    )
-    .await
-    .map_err(|_| ())?;
-    let value: zbus::zvariant::OwnedValue = timeout(
-        Duration::from_secs(3),
-        properties.call("Get", &(MANAGER, "PreparingForSleep")),
-    )
-    .await
-    .map_err(|_| ())?
-    .map_err(|_| ())?;
-    let sleeping = bool::try_from(value).map_err(|_| ())?;
-    {
+        .map_err(|_| ())?;
+        let proxy = Proxy::new_owned(
+            connection.clone(),
+            owner.to_string(),
+            PATH.to_owned(),
+            MANAGER.to_owned(),
+        )
+        .await
+        .map_err(|_| ())?;
+        let signals = proxy
+            .receive_signal("PrepareForSleep")
+            .await
+            .map_err(|_| ())?;
+        let inhibitor: Option<OwnedFd> = Some(
+            timeout(
+                Duration::from_secs(3),
+                proxy.call(
+                    "Inhibit",
+                    &(
+                        "sleep",
+                        "RelayForge",
+                        "Clean up owned hotspot before sleep",
+                        "delay",
+                    ),
+                ),
+            )
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?,
+        );
+        let properties = Proxy::new(
+            connection,
+            owner.as_str(),
+            PATH,
+            "org.freedesktop.DBus.Properties",
+        )
+        .await
+        .map_err(|_| ())?;
+        let value: zbus::zvariant::OwnedValue = timeout(
+            Duration::from_secs(3),
+            properties.call("Get", &(MANAGER, "PreparingForSleep")),
+        )
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())?;
+        let sleeping = bool::try_from(value).map_err(|_| ())?;
+        Ok(Self {
+            proxy,
+            owner: owner.to_string(),
+            signals,
+            inhibitor,
+            sleeping,
+        })
+    }
+    fn install(&self, service: &Service) {
         let mut power = service.power.lock().unwrap();
         power.available = true;
-        power.sleep(sleeping);
-        if sleeping {
+        power.sleep(self.sleeping);
+        power.inhibited = !self.sleeping;
+        if self.sleeping {
             service
                 .cancellation
                 .send_modify(|revision| *revision = revision.wrapping_add(1));
         }
     }
+}
+pub(crate) struct Monitor {
+    proxy: Proxy<'static>,
+    owner: String,
+    signals: zbus::proxy::SignalStream<'static>,
+    inhibitor: Option<OwnedFd>,
+    sleeping: bool,
+}
+pub(crate) async fn initialize(connection: &Connection, service: &Service) -> Option<Monitor> {
+    let monitor = timeout(Duration::from_secs(10), Monitor::connect(connection))
+        .await
+        .ok()?
+        .ok()?;
+    monitor.install(service);
+    Some(monitor)
+}
+async fn monitor(
+    connection: &Connection,
+    service: &Service,
+    initial: Option<Monitor>,
+) -> Result<(), ()> {
+    let monitor = match initial {
+        Some(monitor) => monitor,
+        None => initialize(connection, service).await.ok_or(())?,
+    };
+    let Monitor {
+        proxy,
+        owner,
+        mut signals,
+        mut inhibitor,
+        ..
+    } = monitor;
+    let dbus = zbus::fdo::DBusProxy::new(connection)
+        .await
+        .map_err(|_| ())?;
     // Signal receipt must remain responsive while cleanup/startup awaits I/O.
-    let (events, mut receiver) = tokio::sync::mpsc::channel::<bool>(16);
+    let (events, mut receiver) = tokio::sync::mpsc::channel::<(bool, u64)>(16);
     let reader = async {
         let mut owner_timer = tokio::time::interval(Duration::from_millis(500));
         loop {
@@ -409,16 +493,17 @@ async fn monitor(connection: &Connection, service: &Service) -> Result<(), ()> {
                 message = signals.next() => {
                     let message = message.ok_or(())?;
                     let (sleeping,): (bool,) = message.body().deserialize().map_err(|_| ())?;
-                    {
+                    let generation = {
                         let mut power = service.power.lock().unwrap();
                         power.sleep(sleeping);
                         if sleeping { service.cancellation.send_modify(|revision| *revision = revision.wrapping_add(1)); }
-                    }
-                    events.try_send(sleeping).map_err(|_| ())?;
+                        power.sleep_generation
+                    };
+                    events.try_send((sleeping,generation)).map_err(|_| ())?;
                 }
                 _ = owner_timer.tick() => {
                     let current = timeout(Duration::from_secs(3), dbus.get_name_owner(LOGIN.try_into().unwrap())).await.map_err(|_| ())?.map_err(|_| ())?;
-                    if current != owner { return Err::<(), ()>(()); }
+                    if current.as_str() != owner { return Err::<(), ()>(()); }
                 }
             }
         }
@@ -428,9 +513,10 @@ async fn monitor(connection: &Connection, service: &Service) -> Result<(), ()> {
         loop {
             tokio::select! {
                 event = receiver.recv() => {
-                    let sleeping = event.ok_or(())?;
+                    let (sleeping,generation) = event.ok_or(())?;
                     if !sleeping {
                         inhibitor = Some(timeout(Duration::from_secs(3), proxy.call("Inhibit", &("sleep", "RelayForge", "Clean up owned hotspot before sleep", "delay"))).await.map_err(|_| ())?.map_err(|_| ())?);
+                        service.power.lock().unwrap().acquired(generation);
                     }
                 }
                 _ = timer.tick() => {}
@@ -452,6 +538,7 @@ mod tests {
     fn sleep_gate_and_stop_revision_are_independent_of_backend_results() {
         let mut state = State {
             available: true,
+            inhibited: true,
             ..State::default()
         };
         state.sleep(true);
@@ -470,12 +557,14 @@ mod tests {
         let original = Upstream::test_connection(2412);
         let mut state = State {
             available: true,
+            inhibited: true,
             ..State::default()
         };
         state.arm(Config::new(), original.clone(), state.revision);
         state.sleep(true);
         state.sleep(false);
         state.cleanup = false;
+        state.inhibited = true;
         state.after = Some(now + SETTLE);
         assert!(state.stable(original.clone(), now).is_none());
         assert!(state.stable(original.clone(), now + SETTLE).is_none());
@@ -490,5 +579,52 @@ mod tests {
         state.arm(Config::new(), original, revision);
         assert!(state.intent.is_none());
         assert!(state.stable(roamed, now + SETTLE * 5).is_none());
+    }
+    #[test]
+    fn stale_poll_cannot_cancel_new_intent_or_replace_clients() {
+        let mut state = State {
+            available: true,
+            inhibited: true,
+            ..State::default()
+        };
+        let mut core = Lifecycle::default();
+        let old = core.begin(Method::Start).unwrap();
+        let stop = core.begin(Method::Stop).unwrap();
+        core.complete(Method::Stop, stop, true);
+        let current = core.begin(Method::Start).unwrap();
+        state.arm(
+            Config::new(),
+            Upstream::test_connection(2412),
+            state.revision,
+        );
+        let mut clients = json!([{"mac":"new-client"}]);
+        assert!(state
+            .observe(&mut core, old, Status::default(), &mut clients, json!([]))
+            .is_none());
+        assert!(state.intent.is_some());
+        assert_eq!(clients, json!([{"mac":"new-client"}]));
+        assert!(core.is_current(current));
+    }
+    #[test]
+    fn inhibitor_completion_is_bound_to_sleep_cycle_not_stop_revision() {
+        let mut state = State {
+            available: true,
+            inhibited: true,
+            ..State::default()
+        };
+        state.sleep(true);
+        state.sleep(false);
+        state.cleanup = false;
+        let old = state.sleep_generation;
+        assert!(state.blocked());
+        state.sleep(true);
+        state.sleep(false);
+        state.cleanup = false;
+        state.acquired(old);
+        assert!(state.blocked());
+        state.cancel();
+        state.acquired(state.sleep_generation);
+        assert!(!state.blocked());
+        assert!(state.intent.is_none());
     }
 }

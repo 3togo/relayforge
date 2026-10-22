@@ -17,8 +17,9 @@ frequency agree before and after Start. Failure to establish that evidence does
 not prevent ordinary manual sharing, but does not grant automatic recovery.
 Dedicated adapters without such an upstream require manual Start after sleep.
 
-Stop invalidates intent immediately, including while an automatic Start is
-pending. Successfully changed settings also invalidate intent; external edits
+Stop invalidates intent immediately, including while a Start is awaiting
+authorization, queued behind another operation, or running automatically.
+Superseded Start replies cannot report stale success. Successfully changed settings also invalidate intent; external edits
 are detected before recovery. Rejected edits do not change authorization.
 Unexpected backend loss outside a sleep cycle still requires explicit Start.
 This feature does not reconnect Wi-Fi, switch profiles, change regulatory policy,
@@ -29,7 +30,9 @@ or adopt another process's hotspot.
 The service resolves logind to its unique bus owner and subscribes to
 PrepareForSleep on that owner, path and interface. Signals from unrelated bus
 clients cannot request sleep handling. It also reads PreparingForSleep during
-subscription setup. A delay-mode sleep inhibitor is held while awake.
+subscription setup. A delay-mode sleep inhibitor is held while awake. Initial setup finishes before
+desktop methods are registered. During wake, both explicit and automatic Start
+wait for the inhibitor for that sleep generation to be acquired.
 
 Before sleep, Rust blocks new Start requests, cancels pending startup, and runs
 the existing backend's owned cleanup. Cleanup must be confirmed before the delay
@@ -65,7 +68,9 @@ sleep event cancel an automatic Start through the existing cancellation channel.
 Logind disappearance, replacement, malformed signals or failed inhibitor setup
 invalidate recovery intent. An established monitor's loss also cancels startup
 and schedules owned cleanup. Subscription is retried after five seconds;
-reconnection alone never restores the previous authorization.
+reconnection alone never restores the previous authorization. Losing logind
+during a known sleep transition keeps Start blocked until a trusted awake
+snapshot or signal returns. Stop remains available.
 
 ## Verification and limits
 
@@ -80,3 +85,6 @@ and [delay-inhibitor contract](https://github.com/systemd/systemd/blob/main/docs
 No live suspend, installed-service activation or physical hotspot is required by
 these tests. Real sleep timing, drivers, DHCP/DNS/NAT and distribution authorization
 remain hardware/deployment gates; simulated results do not certify them.
+
+The [race audit](native-suspend-audit.md) records cancellation, stale-observation,
+inhibitor-handshake and late-configuration fixes and their regression coverage.

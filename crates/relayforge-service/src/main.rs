@@ -34,6 +34,7 @@ struct Service {
     native: Option<Arc<native_backend::Backend>>,
     configuration: Arc<Mutex<config_store::Store>>,
     operations: tokio::sync::Mutex<()>,
+    notifications: tokio::sync::Mutex<()>,
     config_users: tokio::sync::RwLock<()>,
     radio: radio::Source,
     cancellation: tokio::sync::watch::Sender<u64>,
@@ -108,6 +109,7 @@ impl Service {
     }
 
     async fn emit_status(&self, connection: &Connection) {
+        let _notification = self.notifications.lock().await;
         let data = serde_json::to_string(&self.core.lock().unwrap().status).unwrap();
         let _ = connection
             .emit_signal(
@@ -120,14 +122,46 @@ impl Service {
             .await;
     }
 
+    async fn emit_clients(&self, connection: &Connection) {
+        let _notification = self.notifications.lock().await;
+        let data = self.clients.lock().unwrap().to_string();
+        let _ = connection
+            .emit_signal(
+                None::<&str>,
+                OBJECT_PATH,
+                BUS_NAME,
+                "ClientsChanged",
+                &(data,),
+            )
+            .await;
+    }
+
     async fn invoke(
         &self,
         method: Method,
         params: Value,
         connection: &Connection,
     ) -> fdo::Result<Value> {
+        self.invoke_requested(method, params, connection, None)
+            .await
+    }
+
+    async fn invoke_requested(
+        &self,
+        method: Method,
+        params: Value,
+        connection: &Connection,
+        request: Option<tokio::sync::watch::Receiver<u64>>,
+    ) -> fdo::Result<Value> {
+        // Subscribe before the operation queue: Stop/sleep must cancel requests
+        // already waiting there, not just the currently executing startup.
+        let mut cancelled = request.unwrap_or_else(|| self.cancellation.subscribe());
+        let cancelled_before_queue = cancelled.has_changed().unwrap_or(true);
+        let request_revision = *cancelled.borrow();
         if method == Method::Stop {
             self.power.lock().unwrap().cancel();
+            self.cancellation
+                .send_modify(|revision| *revision = revision.wrapping_add(1));
         }
         let permits = if method == Method::Stop {
             &self.stop_requests
@@ -141,6 +175,11 @@ impl Service {
         // Stop keeps its own budget and bypasses this gate to cancel startup.
         let _operation = if method == Method::Stop {
             None
+        } else if method == Method::Start {
+            Some(tokio::select! {
+                guard = self.operations.lock() => guard,
+                _ = cancelled.changed() => return Ok(json!({"success":false,"error":"Startup cancelled while queued"})),
+            })
         } else {
             Some(self.operations.lock().await)
         };
@@ -159,6 +198,11 @@ impl Service {
         } else {
             None
         };
+        if method == Method::Start
+            && (cancelled_before_queue || *cancelled.borrow() != request_revision)
+        {
+            return Ok(json!({"success":false,"error":"Startup cancelled while queued"}));
+        }
         if self.native.is_some() {
             if method == Method::Start && self.power.lock().unwrap().blocked() {
                 return Ok(
@@ -213,13 +257,8 @@ impl Service {
             let epoch = core
                 .begin(method)
                 .map_err(|s| fdo::Error::Failed(s.into()))?;
-            if method == Method::Stop {
-                self.cancellation
-                    .send_modify(|revision| *revision = revision.wrapping_add(1));
-            }
             (epoch, active)
         };
-        let mut cancelled = self.cancellation.subscribe();
         let mut startup_config = None;
         let mut resume_guard = None;
         if method == Method::Start && !was_active {
@@ -275,7 +314,7 @@ impl Service {
         let result = if let Some(native) = &self.native {
             match method {
                 Method::Start => Ok(native
-                    .start(startup_config.as_ref().unwrap(), cancelled, None)
+                    .start(startup_config.as_ref().unwrap(), cancelled.clone(), None)
                     .await),
                 Method::Stop => Ok(json!(native.stop().await)),
                 _ => Err("Unsupported native operation".into()),
@@ -313,15 +352,11 @@ impl Service {
                     if let Some(original) = resume_guard {
                         // Arm only if the connection is still exactly the one authorized
                         // before startup; failed observations never grant resume intent.
-                        if let Ok(Ok(fresh)) = timeout(
-                            Duration::from_secs(8),
-                            networkmanager::resume_probe(
-                                self.fixture,
-                                startup_config.as_ref().unwrap(),
-                            ),
-                        )
-                        .await
-                        {
+                        let fresh = tokio::select! {
+                            result = timeout(Duration::from_secs(8), networkmanager::resume_probe(self.fixture, startup_config.as_ref().unwrap())) => result.ok().and_then(Result::ok),
+                            _ = cancelled.changed() => None,
+                        };
+                        if let Some(fresh) = fresh {
                             if fresh == original && self.core.lock().unwrap().is_current(epoch) {
                                 self.power.lock().unwrap().arm(
                                     startup_config.as_ref().unwrap().clone(),
@@ -332,17 +367,21 @@ impl Service {
                         }
                     }
                 }
+                if method == Method::Start
+                    && (*cancelled.borrow() != request_revision
+                        || !self.core.lock().unwrap().is_current(epoch))
+                {
+                    self.emit_status(connection).await;
+                    return Ok(json!({"success":false,"error":"Startup cancelled"}));
+                }
                 if method == Method::Stop && success {
-                    *self.clients.lock().unwrap() = json!([]);
-                    let _ = connection
-                        .emit_signal(
-                            None::<&str>,
-                            OBJECT_PATH,
-                            BUS_NAME,
-                            "ClientsChanged",
-                            &("[]",),
-                        )
-                        .await;
+                    {
+                        let core = self.core.lock().unwrap();
+                        if core.is_current(epoch) {
+                            *self.clients.lock().unwrap() = json!([]);
+                        }
+                    }
+                    self.emit_clients(connection).await;
                 }
                 if matches!(
                     method,
@@ -500,9 +539,10 @@ impl Service {
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
+        let request = self.cancellation.subscribe();
         self.authorize(connection, &header).await?;
         Ok(self
-            .invoke(Method::Start, Value::Null, connection)
+            .invoke_requested(Method::Start, Value::Null, connection, Some(request))
             .await?
             .to_string())
     }
@@ -884,6 +924,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         native: native.clone(),
         configuration: Arc::new(Mutex::new(configuration)),
         operations: tokio::sync::Mutex::new(()),
+        notifications: tokio::sync::Mutex::new(()),
         config_users: tokio::sync::RwLock::new(()),
         radio,
         cancellation: cancellation.clone(),
@@ -896,13 +937,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         requests: Semaphore::new(31),
         stop_requests: Semaphore::new(1),
     };
+    // Complete the first logind snapshot/inhibitor handshake before accepting Start.
+    let initial_power = if native_mode {
+        power::initialize(&connection, &service).await
+    } else {
+        None
+    };
     connection.object_server().at(OBJECT_PATH, service).await?;
     connection
         .object_server()
         .remove::<Initializing, _>(OBJECT_PATH)
         .await?;
     let power_task = if native_mode {
-        Some(tokio::spawn(power::run(connection.clone())))
+        Some(tokio::spawn(power::run(connection.clone(), initial_power)))
     } else {
         None
     };
@@ -927,45 +974,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let epoch = core.lock().unwrap().epoch();
                 if let Some((status, observed)) = backend.poll().await {
-                    if service.power.lock().unwrap().owns_status() {
-                        continue;
-                    }
-                    if !status.active {
-                        service.power.lock().unwrap().cancel();
-                    }
-                    let body = {
-                        let mut core = core.lock().unwrap();
-                        if !core.is_current(epoch) {
-                            continue;
-                        }
-                        let _ = core.observe(json!(status));
-                        serde_json::to_string(&core.status).unwrap()
-                    };
-                    let _ = connection
-                        .emit_signal(
-                            None::<&str>,
-                            OBJECT_PATH,
-                            BUS_NAME,
-                            "StatusChanged",
-                            &(body,),
-                        )
-                        .await;
                     let changed = {
-                        let mut old = clients.lock().unwrap();
-                        let changed = *old != observed;
-                        *old = observed.clone();
-                        changed
+                        let mut power = service.power.lock().unwrap();
+                        let mut core = core.lock().unwrap();
+                        let mut clients = clients.lock().unwrap();
+                        power.observe(&mut core, epoch, status, &mut clients, observed)
                     };
-                    if changed {
-                        let _ = connection
-                            .emit_signal(
-                                None::<&str>,
-                                OBJECT_PATH,
-                                BUS_NAME,
-                                "ClientsChanged",
-                                &(observed.to_string(),),
-                            )
-                            .await;
+                    if let Some(changed) = changed {
+                        service.emit_status(&connection).await;
+                        if changed {
+                            service.emit_clients(&connection).await;
+                        }
                     }
                 }
             }

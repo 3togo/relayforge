@@ -27,7 +27,8 @@ and durable recovery from interrupted final cleanup. Its
 and offline results. [Native suspend/resume](docs/native-suspend.md) now coordinates
 logind sleep, owned cleanup and recovery of a prior authorized sharing request.
 Its [validation report](docs/native-suspend-validation.md) records offline coverage
-and remaining live-suspend limits.
+and remaining live-suspend limits. A [race audit](docs/native-suspend-audit.md)
+hardens cancellation, status publication and inhibitor recovery.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
