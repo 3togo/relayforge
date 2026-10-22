@@ -105,6 +105,15 @@ pub struct Journal<T: Record = Owned> {
     uid: u32,
     expected: Option<Vec<u8>>,
 }
+impl<T: Record> Drop for Journal<T> {
+    fn drop(&mut self) {
+        // CLOEXEC closes a forked child's copy only after exec. Explicit unlock
+        // ends our lease immediately even while another thread is spawning.
+        unsafe {
+            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
 impl<T: Record> Journal<T> {
     pub fn open(path: &Path, uid: u32) -> Result<Self> {
         Self::open_named(path, uid, c"networkmanager.json")
