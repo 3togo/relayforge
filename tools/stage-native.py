@@ -251,7 +251,11 @@ def stage(binary, output, backend='networkmanager'):
             destination.chmod(0o755 if target.endswith(('/relayforge-service','/create_ap')) else 0o644)
             manifest[target]={'sha256':hashlib.sha256(destination.read_bytes()).hexdigest(),
                               'mode':oct(stat.S_IMODE(destination.stat().st_mode))}
+        for directory in output.rglob('*'):
+            if directory.is_dir():
+                directory.chmod(0o755)
         (output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+        (output/'manifest.json').chmod(0o644)
         return manifest
     except BaseException:
         # Only this newly created staging directory belongs to this operation.

@@ -1,5 +1,6 @@
 """Native payload staging must preserve existing trees and exclude credentials."""
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -27,6 +28,18 @@ class StagingTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 staging.stage(binary,output)
             self.assertTrue((output/'manifest.json').exists())
+
+    def test_staging_permissions_do_not_depend_on_caller_umask(self):
+        for mask in (0o002,0o077):
+            with self.subTest(mask=mask),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);binary=root/'binary';binary.write_bytes(b'\x7fELFfixture')
+                before=os.umask(mask)
+                try:staging.stage(binary,root/'payload')
+                finally:os.umask(before)
+                self.assertEqual((root/'payload/manifest.json').stat().st_mode&0o777,0o644)
+                self.assertEqual((root/'payload').stat().st_mode&0o777,0o700)
+                for path in (root/'payload').rglob('*'):
+                    if path.is_dir():self.assertEqual(path.stat().st_mode&0o777,0o755)
 
     def test_non_elf_and_symlink_output_never_replace_existing_files(self):
         with tempfile.TemporaryDirectory() as directory:

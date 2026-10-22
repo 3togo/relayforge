@@ -127,3 +127,9 @@ The backend audit added a shared connected-subnet guard for both native modes
 and durable completion records for interrupted instance retirement. See
 [the audit findings](backend-audit.md) for fixes, retained compatibility paths
 and remaining hardware/deployment and feature-parity gates.
+
+## Offline deployment
+
+[Native deployment](native-deployment.md) now provides validated image installation,
+upgrade, journaled recovery and file rollback. Live service handover, distribution
+packaging, activation/authorization and physical upgrade/rollback remain gates.

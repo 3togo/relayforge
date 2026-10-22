@@ -30,6 +30,8 @@ Its [validation report](docs/native-suspend-validation.md) records offline cover
 and remaining live-suspend limits. A [race audit](docs/native-suspend-audit.md)
 hardens cancellation, status publication and inhibitor recovery; its
 [validation report](docs/native-suspend-audit-validation.md) records the tested revision.
+[Native offline deployment](docs/native-deployment.md) now supports installation,
+upgrade, interrupted recovery and rollback in an explicitly selected dormant image.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
@@ -155,8 +157,10 @@ subsequent driver/channel extraction, baseline checks and desktop rejection test
 The [instance runner report](docs/native-instance-validation.md) records native
 option parsing, signal cleanup, directory ownership, housekeeping and ELF staging.
 
-No installer or package release is supplied. Staging creates a reviewable payload;
-it does not replace services or change system activation. Native hotspot activation
+The Rust [offline deployment engine](docs/native-deployment.md) can apply and roll
+back a staged payload in a dormant image. It refuses the live root and never enables
+or starts services. No distribution package release or live service handover is
+supplied. Staging itself only creates a reviewable payload. Native hotspot activation
 has not been tested on physical hardware. Run only
 in a prepared disposable environment until the migration and hardware gates in
 [the architecture plan](docs/architecture.md) are completed. The original

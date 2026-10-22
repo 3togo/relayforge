@@ -4,6 +4,7 @@ mod ap_runtime;
 mod backend;
 mod config_store;
 mod create_ap;
+mod deployment;
 mod inventory;
 mod native_backend;
 mod networkmanager;
@@ -675,6 +676,9 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(mode @ ("--deploy" | "--test-deploy")) = args.first().map(String::as_str) {
+        return deployment::run(&args[1..], mode == "--test-deploy").map_err(Into::into);
+    }
     if let Some(mode @ ("--create-ap-instance" | "--test-ap-instance")) =
         args.first().map(String::as_str)
     {
