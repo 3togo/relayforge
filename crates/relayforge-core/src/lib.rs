@@ -1,6 +1,7 @@
 //! Desktop-independent lifecycle and compatibility protocol. No I/O or credentials in state.
 pub mod config;
 pub mod radio;
+pub mod subnet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

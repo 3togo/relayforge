@@ -1110,6 +1110,11 @@ pub async fn run_instance(args: &[String], fixture: bool) -> Result<()> {
     instance_runtime::run(&platform, args).await
 }
 
+pub(crate) async fn finish_instance_cleanup(marker: &Path, fixture: Option<&Path>) -> Result<()> {
+    let platform = Platform::new(fixture)?;
+    instance_runtime::completion::recover_marker(&platform, marker).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

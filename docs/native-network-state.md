@@ -70,3 +70,13 @@ and temporary interface metadata; missing state never falls back to live kernel
 operations. Tests cover partial writes, lost replies, ownership conflicts,
 shared leases, physical restoration and desktop cleanup/recovery. No live
 network operation or deployment is part of these checks.
+
+## Connected subnet collisions
+
+Native create_ap now shares its IPv4 /24 overlap parser with the native
+NetworkManager controller. It checks connected routes before creating the AP
+and again before changing its type or assigning its address. Only an
+identity-recorded AP's own routes are excluded on retry. Existing connected
+networks, including more-specific host routes, prevent conflicting setup.
+Malformed route inspection fails closed. These reads narrow the activation
+window; they do not lock out external network changes after inspection.

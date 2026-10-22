@@ -13,13 +13,11 @@ unchanged GTK / GNOME Shell / tray controls
         |-- native configuration/store
         |-- native sysfs inventory
         |-- native radio parsing / startup preflight
-        |-- opt-in native NetworkManager controller / ownership journal
-        |-- opt-in Rust create_ap supervisor / gated Rust instance helper / recovery journal
-        `-- anonymous stdin/stdout JSON pipes
-                         |
-              pinned Python backend adapter
-                         |
-             create_ap / NetworkManager / kernel
+        |-- native NetworkManager controller --> NetworkManager / kernel
+        |-- Rust create_ap supervisor --> Rust instance / daemons / kernel
+        `-- compatibility JSON pipe --> pinned Python adapter
+                                           |
+                                create_ap / NetworkManager / kernel
 ```
 
 relayforge-core has no GLib, D-Bus, process or filesystem dependency. It validates
@@ -124,3 +122,8 @@ link/type/address setup, teardown and shared forwarding sysctl restoration.
 [Rust device ownership](native-device-ownership.md) now handles interface creation
 and NetworkManager managed-state restoration. [Rust daemon supervision](native-daemons.md)
 now handles configuration, launch, readiness and private leases.
+
+The backend audit added a shared connected-subnet guard for both native modes
+and durable completion records for interrupted instance retirement. See
+[the audit findings](backend-audit.md) for fixes, retained compatibility paths
+and remaining hardware/deployment and feature-parity gates.

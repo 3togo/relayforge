@@ -597,6 +597,13 @@ impl Backend {
         Ok(())
     }
     async fn recover_owned(&self, owned: &Owned) -> Result<()> {
+        crate::ap_runtime::finish_instance_cleanup(
+            &owned.pidfile(&self.platform.runtime),
+            self.platform
+                .fixture
+                .then_some(self.platform.runtime.as_path()),
+        )
+        .await?;
         for directory in self.directories(owned)? {
             run_helper(
                 &self.helper,

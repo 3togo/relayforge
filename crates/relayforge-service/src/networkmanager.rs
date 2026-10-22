@@ -335,33 +335,7 @@ impl Platform {
                 })
                 .collect::<Result<_>>()?
         };
-        let gateway = u32::from(
-            gateway
-                .parse::<std::net::Ipv4Addr>()
-                .map_err(|_| "Invalid sharing gateway")?,
-        );
-        for route in routes {
-            let (network, prefix) = route.split_once('/').unwrap_or((&route, "32"));
-            let address = u32::from(
-                network
-                    .parse::<std::net::Ipv4Addr>()
-                    .map_err(|_| "Invalid connected network")?,
-            );
-            let prefix = prefix
-                .parse::<u32>()
-                .ok()
-                .filter(|p| *p <= 32)
-                .ok_or("Invalid connected network prefix")?;
-            let mask = if prefix.min(24) == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix.min(24))
-            };
-            if address & mask == gateway & mask {
-                return Err("Hotspot subnet overlaps an existing connected network");
-            }
-        }
-        Ok(())
+        relayforge_core::subnet::check(gateway, &routes)
     }
     async fn check_identity(&self, bus: &Bus, owned: &Owned) -> Result<()> {
         let identity = self

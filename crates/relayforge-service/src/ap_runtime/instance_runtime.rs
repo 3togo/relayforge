@@ -1,4 +1,5 @@
 //! Native helper options, atomic instance publication, signals and owned housekeeping.
+pub(super) mod completion;
 use super::*;
 use relayforge_core::config::{self, Config};
 use std::os::unix::fs::DirBuilderExt;
@@ -141,6 +142,12 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
     let engine = Directory::open(&p.root)?;
     let name = format!("create_ap.{}.conf.{}", config["WIFI_IFACE"], &token[..8]);
     let destination = p.root.join(&name);
+    if engine
+        .read(&format!(".cleanup-{name}.json"), true, LIMIT)?
+        .is_some()
+    {
+        return Err("Complete prior instance retirement before allocating again");
+    }
     let temporary = p.root.join(format!(".pending-{token}"));
     fs::DirBuilder::new()
         .mode(0o700)
@@ -386,9 +393,10 @@ fn file_proof(dir: &Directory, name: &str) -> Result<(u64, u64, String)> {
         format!("{:x}", Sha256::digest(bytes)),
     ))
 }
-fn housekeeping(dir: &Directory, fixture: bool) -> Result<()> {
+type Inventory = (BTreeMap<String, (u64, u64, String)>, Option<(u64, u64)>);
+fn inventory(dir: &Directory, fixture: bool) -> Result<Inventory> {
     current_directory(dir)?;
-    let mut files = Vec::new();
+    let mut files = BTreeMap::new();
     let mut control = None;
     for entry in fs::read_dir(&dir.path).map_err(|_| "Cannot list completed instance")? {
         let entry = entry.map_err(|_| "Cannot inspect completed instance")?;
@@ -416,42 +424,18 @@ fn housekeeping(dir: &Directory, fixture: bool) -> Result<()> {
             return Err("Unknown instance files retained for review");
         }
         let proof = file_proof(dir, &name)?;
-        files.push((name, proof));
+        files.insert(name, proof);
         if files.len() > 64 {
             return Err("Too many instance files; retaining evidence");
         }
     }
     current_directory(dir)?;
-    if let Some(identity) = control {
-        let meta = fs::symlink_metadata(dir.path.join("hostapd_ctrl"))
-            .map_err(|_| "Control directory disappeared")?;
-        if !meta.is_dir() || identity != (meta.dev(), meta.ino()) {
-            return Err("Hostapd control directory changed");
-        }
-        let name = filename("hostapd_ctrl")?;
-        if unsafe { libc::unlinkat(dir.fd.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-            return Err("Cannot remove empty hostapd control directory");
-        }
-    }
-    // Keep the snapshot until every other owned file has been removed.
-    files.sort_by_key(|(name, _)| name == "recovery.json");
-    for (name, proof) in files {
-        current_directory(dir)?;
-        if file_proof(dir, &name)? != proof {
-            return Err("Instance file replaced before deletion");
-        }
-        let name = filename(&name)?;
-        if unsafe { libc::unlinkat(dir.fd.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-            return Err("Cannot remove verified instance record");
-        }
-    }
-    dir.fd
-        .sync_all()
-        .map_err(|_| "Cannot sync completed instance")?;
-    current_directory(dir)?;
-    fs::remove_dir(&dir.path).map_err(|_| "Cannot remove completed instance directory")
+    Ok((files, control))
 }
 async fn cleanup(p: &Platform, path: &Path) -> Result<()> {
+    if completion::recover(p, path, false).await? {
+        return Ok(());
+    }
     let dir = p.open(path, false)?;
     snapshot(p, &dir)?;
     let _lock = dir.transaction_lock(c".instance.lock").await?;
@@ -477,40 +461,18 @@ async fn cleanup(p: &Platform, path: &Path) -> Result<()> {
     if let Some(error) = failure {
         return Err(error);
     }
-    let (data, _) = snapshot(p, &dir)?;
-    let marker = Path::new(&data.fields["DAEMON_PIDFILE"]);
-    let root = Directory::open(marker.parent().unwrap())?;
-    let name = marker.file_name().unwrap().to_str().unwrap();
-    let expected = format!("{}\n", data.owner.pid).into_bytes();
-    let markers = [name.to_string(), format!("{name}.ready")];
-    for name in &markers {
-        if root
-            .read(name, true, 32)?
-            .is_some_and(|bytes| bytes != expected)
-        {
-            return Err("Instance marker changed; retaining evidence");
-        }
-    }
-    housekeeping(&dir, p.fixture.is_some())?;
-    for name in markers {
-        // Root is private and marker contents were checked before removing instance evidence.
-        if root.read(&name, true, 32)?.is_some() {
-            let name = filename(&name)?;
-            if unsafe { libc::unlinkat(root.fd.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-                return Err("Cannot remove completed instance marker");
-            }
-        }
-    }
-    root.fd
-        .sync_all()
-        .map_err(|_| "Cannot sync completed instance markers")
+    completion::create(p, &dir).await
 }
+
 pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
     unsafe {
         libc::umask(0o077);
     }
     match parse(args)? {
         Options::Recover(path) => {
+            if completion::recover(p, &path, true).await? {
+                return Ok(());
+            }
             let dir = p.open(&path, false)?;
             let (data, _) = snapshot(p, &dir)?;
             if data.owner.current()?.is_some() {

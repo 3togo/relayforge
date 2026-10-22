@@ -67,11 +67,20 @@ directories block removal. Only an empty, owner-matched hostapd control director
 can be removed. Any existing service PID/readiness markers must still contain the exact
 recorded owner's PID. No recursive directory deletion or orphan sweep runs.
 
-The recovery snapshot is deleted last. A process death during final record
-deletion can still leave incomplete evidence, including a snapshot-less directory
-in the final unlink/rmdir window. Recovery then fails closed for administrator
-review instead of inferring that resources are clean. This is a retained safety
-limit, not a claim of atomic deletion of an entire filesystem tree.
+After resource verification, Rust persists a mode-0600 completion record in the
+engine root before deleting markers or instance files. It binds the snapshot,
+directory identity, known file fingerprints and any existing PID/readiness
+markers. The completion record is deleted only after all owned files, markers
+and the directory are gone. Recovery can therefore resume disk-only retirement
+after the snapshot or even the instance directory has been removed, without
+replaying network mutations. The outer supervisor finishes matching completion
+records before clearing its own journal or frozen credentials.
+
+Resumption rejects unknown or changed remaining files, replaced directories,
+changed markers and malformed completion records. Missing files are accepted
+only under a valid completion proof. A pending completion also prevents reuse of
+the instance name. Historical snapshot-less directories without such proof
+remain unconfirmed; unpublished `.pending-TOKEN` directories are not adopted.
 
 Historical Bash helper identities and snapshots remain readable during a
 controlled migration. The outer supervisor can still run an explicitly installed

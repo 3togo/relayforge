@@ -15,6 +15,7 @@ struct Netdev {
 struct Simulation {
     interfaces: BTreeMap<String, Netdev>,
     phys: BTreeMap<String, u32>,
+    routes: Vec<String>,
     nm: Option<devices::SimManager>,
     nm_bus: bool,
     global: u8,
@@ -70,6 +71,46 @@ impl Kernel<'_> {
             return Err("Simulated network reply lost");
         }
         Ok(())
+    }
+    async fn subnet(&self, data: &Snapshot, exclude: Option<&str>) -> Result<()> {
+        let routes = if self.p.fixture.is_some() {
+            let s = self.simulation()?.1;
+            let mut routes = s.routes;
+            for (name, device) in s.interfaces {
+                if exclude == Some(name.as_str()) {
+                    continue;
+                }
+                routes.extend(device.addresses.into_iter().filter(|v| {
+                    v.split('/')
+                        .next()
+                        .is_some_and(|v| v.parse::<std::net::Ipv4Addr>().is_ok())
+                }));
+            }
+            routes
+        } else {
+            let text = self
+                .command("ip", &["-j", "-4", "route", "show", "scope", "link"])
+                .await?;
+            let routes: Vec<serde_json::Value> =
+                serde_json::from_str(&text).map_err(|_| "Cannot inspect connected routes")?;
+            let mut result = Vec::new();
+            for route in routes {
+                let dev = route["dev"]
+                    .as_str()
+                    .ok_or("Missing connected route interface")?;
+                if exclude == Some(dev) {
+                    continue;
+                }
+                result.push(
+                    route["dst"]
+                        .as_str()
+                        .ok_or("Invalid connected route")?
+                        .to_owned(),
+                );
+            }
+            result
+        };
+        relayforge_core::subnet::check(&data.fields["GATEWAY"], &routes)
     }
     async fn phy(&self, name: &str) -> Result<u32> {
         interface_name(name)?;
@@ -520,6 +561,7 @@ async fn configure(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<()>
     {
         return Err("Interface transaction cannot target the upstream or bridge");
     }
+    check_subnet(p, dir, data).await?;
     let kernel = Kernel { p };
     let current = kernel.inspect(iface).await?.ok_or("AP interface missing")?;
     let bytes = dir.read("interface.json", true, LIMIT)?;
@@ -1072,4 +1114,29 @@ pub(super) async fn daemon_permit(p: &Platform, dir: &Directory) -> Result<()> {
         return Err("AP setup is incomplete");
     }
     Ok(())
+}
+
+pub(super) async fn check_subnet(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<()> {
+    let iface = &data.fields["WIFI_IFACE"];
+    let kernel = Kernel { p };
+    let mut exclude = None;
+    if data.fields["NO_VIRT"] == "0"
+        && !data.fields["VWIFI_IFACE"].is_empty()
+        && data.fields["VWIFI_IFACE"] == *iface
+    {
+        if let Some(current) = kernel.inspect(iface).await? {
+            if data.interfaces.get(iface) == Some(&current.identity) {
+                exclude = Some(iface.as_str());
+            }
+        }
+    } else if let Some(bytes) = dir.read("interface.json", true, LIMIT)? {
+        let intent: InterfaceIntent =
+            serde_json::from_slice(&bytes).map_err(|_| "Invalid interface journal")?;
+        intent.validate(data)?;
+        if let Some(current) = kernel.inspect(iface).await? {
+            intent.check_current(&current)?;
+            exclude = Some(iface.as_str());
+        }
+    }
+    kernel.subnet(data, exclude).await
 }

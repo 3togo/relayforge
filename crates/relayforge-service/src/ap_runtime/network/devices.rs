@@ -302,6 +302,7 @@ async fn create(p: &Platform, dir: &Directory) -> Result<String> {
     if data.fields["SHARE_METHOD"] == "bridge" || !data.fields["ADDED_UNMANAGED"].is_empty() {
         return Err("Unsupported historical device state");
     }
+    super::check_subnet(p, dir, &data).await?;
     let kernel = Kernel { p };
     let root = Directory::open(&p.root)?;
     let _allocation = root.transaction_lock(c".allocation.lock").await?;
