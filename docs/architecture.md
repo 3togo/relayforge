@@ -89,8 +89,9 @@ journals, recovery and automatic resume policy.
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
    client reports, cancellation and owned recovery. The pinned Bash networking
-   engine and its internal Python snapshot/recovery helper remain. See
-   [create_ap supervision](native-create-ap.md). Compatibility mode remains until
+   engine remains; its snapshot/child recovery protocol is now Rust. See
+   [create_ap supervision](native-create-ap.md) and [native recovery](native-recovery.md).
+   Compatibility mode remains until
    feature parity is demonstrated; replacing shell networking is a separate step.
 6. A native service, bus activation and policy payload can now be staged for
    review. Distribution packages, deployed upgrade/rollback validation and

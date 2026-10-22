@@ -43,21 +43,29 @@ class StagingTests(unittest.TestCase):
             self.assertTrue(output.is_symlink())
             self.assertEqual(binary.read_bytes(),b'\x7fELFtest-fixture')
 
-    def test_create_ap_payload_retains_pinned_helper_without_python_supervisor(self):
+    def test_create_ap_payload_contains_native_adapter_without_python(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             binary=root/'binary'
             binary.write_bytes(b'\x7fELFtest-fixture')
             output=root/'payload'
             manifest=staging.stage(binary,output,'create_ap')
-            self.assertEqual(len(manifest),8)
-            for name in ('create_ap','legacy_runtime.py'):
-                target='usr/lib/relayforge/vendor/wifi-relay/daemon/'+name
-                self.assertEqual((output/target).read_bytes(),(ROOT/'vendor/wifi-relay/daemon'/name).read_bytes())
-            self.assertEqual(manifest['usr/lib/relayforge/vendor/wifi-relay/daemon/create_ap']['mode'],'0o755')
+            self.assertEqual(len(manifest),7)
+            target='usr/lib/relayforge/native/create_ap'
+            self.assertEqual((output/target).read_bytes(),staging.native_engine((ROOT/'vendor/wifi-relay/daemon/create_ap').read_bytes()))
+            self.assertEqual(manifest[target]['mode'],'0o755')
+            self.assertNotIn('python3',(output/target).read_text())
+            self.assertEqual((output/target).read_text().count('--create-ap-runtime'),6)
+            self.assertTrue(all(not path.endswith('.py') for path in manifest))
             self.assertTrue(all('worker' not in path and 'wifi-hotspot-daemon.py' not in path for path in manifest))
             unit=(output/'usr/lib/systemd/system/relayforge-create-ap.service').read_text()
             self.assertIn('--native-create-ap --legacy-root /usr/lib/relayforge',unit)
             activation=(output/'usr/share/dbus-1/system-services/io.github.erhanzeyrek.WifiHotspot.service').read_text()
             self.assertIn('SystemdService=relayforge-create-ap.service',activation)
             self.assertFalse((output/'etc').exists())
+
+    def test_native_adapter_rejects_modified_source_even_with_unchanged_helper_calls(self):
+        source=(ROOT/'vendor/wifi-relay/daemon/create_ap').read_bytes()
+        for modified in (source+b'\necho changed\n',source.replace(b'python3 -I',b'python3 -S',1)):
+            with self.subTest(modified=modified[-20:]),self.assertRaises(ValueError):
+                staging.native_engine(modified)

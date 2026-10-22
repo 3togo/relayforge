@@ -1,16 +1,16 @@
 # Rust create_ap supervision
 
 `relayforge-service --native-create-ap --legacy-root /usr/lib/relayforge`
-provides an opt-in Rust supervisor for the pinned create_ap engine. It preserves
+provides an opt-in Rust supervisor for the create_ap engine. It preserves
 all ten desktop D-Bus methods, three signals, authorization and JSON formats.
 The GTK settings, GNOME Shell extension and tray client need no changes. The
 Python D-Bus/GLib worker is never constructed in this mode.
 
-This step replaces supervision, not the networking engine. The unmodified Bash
-create_ap script still configures hostapd, dnsmasq, interfaces and firewall rules.
-Its internal `legacy_runtime.py` helper still saves and validates resource
-snapshots and recovers children. Python remains a runtime dependency for this
-mode. Native NetworkManager mode remains independent of that helper.
+Rust also implements snapshots and child recovery through the
+[native recovery runtime](native-recovery.md). A generated adapter of the pinned
+Bash script configures hostapd, dnsmasq, interfaces and firewall rules while
+calling Rust for all six recovery operations. Neither native service mode
+requires a Python backend; the original compatibility mode remains available.
 
 ## Startup and ownership
 
@@ -84,12 +84,13 @@ python3 tools/stage-native.py --backend create_ap \
   --binary target/release/relayforge-service --output artifacts/create-ap-core
 ```
 
-The fresh output directory contains eight payload files plus a hash/mode
+The fresh output directory contains seven payload files plus a hash/mode
 manifest: the Rust binary, alternative systemd unit and D-Bus activation file,
-original bus and Polkit policies, license, pinned Bash helper and its internal
-Python recovery helper. It excludes the Python supervisor/worker, credentials,
-configuration and desktop replacements. The helper files retain their vendor
-hashes. Staging never installs files, enables services or reloads D-Bus.
+original bus and Polkit policies, license and generated native Bash adapter. It
+excludes the Python supervisor/worker, credentials, configuration and desktop
+replacements. The source vendor files retain their original hashes; staging
+applies only the reviewed helper-call transformation. Staging never installs
+files, enables services or reloads D-Bus.
 
 The systemd unit conflicts with both the compatibility service and native
 NetworkManager unit, preserves the private runtime across restarts, and allows

@@ -10,8 +10,9 @@ lifecycle intent and status snapshots. The opt-in
 [native NetworkManager mode](docs/native-networkmanager.md) also controls
 activation, clients, cancellation, ownership recovery and cleanup without a
 Python worker. The opt-in [Rust create_ap supervisor](docs/native-create-ap.md)
-owns helper processes, readiness, clients and recovery without the Python
-supervisor; its pinned Bash engine and internal Python recovery helper remain.
+owns helper processes, readiness, clients and recovery. Its
+[native recovery runtime](docs/native-recovery.md) replaces the remaining Python
+helper; the native payload retains a Bash networking adapter.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
@@ -19,7 +20,8 @@ are not yet validated production replacements.
 
 Build/tests require Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
 The native NetworkManager runtime uses NetworkManager, iw and ip without Python.
-Native create_ap supervision retains Bash, Python and create_ap networking dependencies.
+Native create_ap retains Bash and create_ap networking dependencies; its backend
+does not require Python.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).

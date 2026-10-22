@@ -1,4 +1,5 @@
 mod ap_process;
+mod ap_runtime;
 mod backend;
 mod config_store;
 mod create_ap;
@@ -574,6 +575,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.first().map(String::as_str) == Some("--create-ap-exec") {
         return create_ap::exec_gate(&args);
     }
+    if let Some(mode) = args.first().map(String::as_str) {
+        if matches!(mode, "--create-ap-runtime" | "--test-ap-runtime") {
+            match ap_runtime::run(&args[1..], mode == "--test-ap-runtime").await {
+                Ok(output) => {
+                    if !output.is_empty() {
+                        println!("{output}");
+                    }
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
     // Diagnostic modes return before bus registration or worker construction.
     // They run read-only iw inspection and never apply a startup plan.
     if let [mode, target] = args.as_slice() {
@@ -748,9 +762,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let helper = if fixture {
                 PathBuf::from(&args[4])
             } else {
-                root.as_ref()
-                    .unwrap()
-                    .join("vendor/wifi-relay/daemon/create_ap")
+                root.as_ref().unwrap().join("native/create_ap")
             };
             native_backend::Backend::CreateAp(create_ap::Backend::new(
                 create_ap::Platform {

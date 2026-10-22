@@ -15,6 +15,23 @@ PAYLOAD={
 }
 
 
+def native_engine(source):
+    """Derive the native adapter while preserving the audited vendor snapshot."""
+    expected=json.loads((ROOT/'vendor/manifest.json').read_text())['files']['daemon/create_ap']
+    if hashlib.sha256(source).hexdigest()!=expected:
+        raise ValueError('Native adapter source differs from the pinned vendor manifest')
+    text=source.decode('utf-8')
+    old='LEGACY_HELPER="$(dirname "$(readlink -f "$0")")/legacy_runtime.py"'
+    call='python3 -I "$LEGACY_HELPER"'
+    if text.count(old)!=1 or text.count(call)!=6:
+        raise ValueError('Pinned create_ap helper protocol changed; review the native adapter')
+    text=text.replace(old,'RUNTIME_HELPER="$(dirname "$(readlink -f "$0")")/../relayforge-service"')
+    text=text.replace(call,'"$RUNTIME_HELPER" --create-ap-runtime')
+    if 'python3' in text or 'LEGACY_HELPER' in text:
+        raise ValueError('Native create_ap adapter still references Python recovery')
+    return text.encode('utf-8')
+
+
 def stage(binary, output, backend='networkmanager'):
     if backend not in ('networkmanager','create_ap'):
         raise ValueError('Unknown native backend')
@@ -24,8 +41,7 @@ def stage(binary, output, backend='networkmanager'):
     payload['usr/lib/systemd/system/'+unit]=ROOT/'packaging'/unit
     payload['usr/share/dbus-1/system-services/io.github.erhanzeyrek.WifiHotspot.service']=ROOT/'packaging'/activation
     if backend=='create_ap':
-        for name in ('create_ap','legacy_runtime.py'):
-            payload['usr/lib/relayforge/vendor/wifi-relay/daemon/'+name]=ROOT/'vendor/wifi-relay/daemon'/name
+        payload['usr/lib/relayforge/native/create_ap']=ROOT/'vendor/wifi-relay/daemon/create_ap'
     binary=Path(binary)
     output=Path(output)
     info=binary.lstat()
@@ -42,7 +58,10 @@ def stage(binary, output, backend='networkmanager'):
         for target,source in {'usr/lib/relayforge/relayforge-service':binary,**payload}.items():
             destination=output/target
             destination.parent.mkdir(parents=True,exist_ok=True)
-            shutil.copyfile(source,destination)
+            if target=='usr/lib/relayforge/native/create_ap':
+                destination.write_bytes(native_engine(source.read_bytes()))
+            else:
+                shutil.copyfile(source,destination)
             destination.chmod(0o755 if target.endswith(('/relayforge-service','/create_ap')) else 0o644)
             manifest[target]={'sha256':hashlib.sha256(destination.read_bytes()).hexdigest(),
                               'mode':oct(stat.S_IMODE(destination.stat().st_mode))}

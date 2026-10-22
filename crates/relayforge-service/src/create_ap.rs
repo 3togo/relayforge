@@ -1,4 +1,4 @@
-//! Native create_ap supervision. The immutable Bash helper retains network transactions.
+//! Native create_ap supervision. The generated Bash adapter retains network transactions.
 use crate::{
     ap_process::{self, Birth, Handle},
     config_store::random_secret,

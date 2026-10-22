@@ -110,6 +110,9 @@ impl Handle {
         Ok(code > 0)
     }
     pub fn verify(&self, allowed: &[(String, Vec<String>)]) -> Result<bool> {
+        self.verify_as(allowed, unsafe { libc::geteuid() })
+    }
+    fn verify_as(&self, allowed: &[(String, Vec<String>)], uid: u32) -> Result<bool> {
         if self.exited()? || !self.birth.live()? {
             return Ok(false);
         }
@@ -117,7 +120,7 @@ impl Handle {
         if fs::metadata(&path)
             .map_err(|_| "Cannot inspect child owner")?
             .uid()
-            != unsafe { libc::geteuid() }
+            != uid
         {
             return Err("Owned process user changed");
         }
@@ -145,7 +148,16 @@ impl Handle {
         Ok(true)
     }
     pub fn signal(&self, signal: i32, allowed: &[(String, Vec<String>)]) -> Result<()> {
-        if !self.verify(allowed)? {
+        self.signal_as(signal, allowed, unsafe { libc::geteuid() })
+    }
+    /// Recovery may target a verified daemon that deliberately dropped privileges.
+    pub fn signal_as(
+        &self,
+        signal: i32,
+        allowed: &[(String, Vec<String>)],
+        uid: u32,
+    ) -> Result<()> {
+        if !self.verify_as(allowed, uid)? {
             return Ok(());
         }
         let code = unsafe {
@@ -183,6 +195,13 @@ mod tests {
         let handle = Handle::open(&birth).unwrap().unwrap();
         assert!(handle
             .signal(libc::SIGUSR1, &[("/unrelated".into(), vec![])])
+            .is_err());
+        assert!(handle
+            .signal_as(
+                libc::SIGUSR1,
+                &[],
+                unsafe { libc::geteuid() }.wrapping_add(1)
+            )
             .is_err());
         let mut reused = birth;
         reused.start.push('0');
