@@ -26,6 +26,8 @@ and durable recovery from interrupted final cleanup. Its
 [validation report](docs/backend-audit-validation.md) records the exact candidate
 and offline results. [Native suspend/resume](docs/native-suspend.md) now coordinates
 logind sleep, owned cleanup and recovery of a prior authorized sharing request.
+Its [validation report](docs/native-suspend-validation.md) records offline coverage
+and remaining live-suspend limits.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
