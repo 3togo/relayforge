@@ -121,7 +121,9 @@ The alternative `--native-create-ap --legacy-root /usr/lib/relayforge` mode requ
 `BACKEND=create_ap`. See [Rust create_ap supervision](docs/native-create-ap.md) for
 its ownership rules, compatibility limits and `--backend create_ap` staging option.
 The [create_ap validation report](docs/native-create-ap-validation.md) records the
-exact candidate, optimized executable and remote checks.
+exact candidate, optimized executable and remote checks. The subsequent
+[native recovery validation](docs/native-recovery-validation.md) records removal
+of the Python helper from the native payload and its process/filesystem checks.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
