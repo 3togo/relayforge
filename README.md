@@ -126,6 +126,8 @@ The [create_ap validation report](docs/native-create-ap-validation.md) records t
 exact candidate, optimized executable and remote checks. The subsequent
 [native recovery validation](docs/native-recovery-validation.md) records removal
 of the Python helper from the native payload and its process/filesystem checks.
+The [firewall extraction report](docs/native-firewall-validation.md) records the
+subsequent NAT/DNS/DHCP rule migration and failure-injection checks.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
