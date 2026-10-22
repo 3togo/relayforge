@@ -4,7 +4,8 @@ The native create_ap payload now uses Rust for snapshots and child recovery as
 well as supervision. It contains no Python backend or recovery helper. The
 existing GTK, GNOME Shell and tray controls keep the same D-Bus contract; the
 optional original compatibility service and its pinned Python files are retained
-in source. Bash still configures/launches hostapd/dnsmasq; interface creation and
+in source. [Rust daemon supervision](native-daemons.md) now configures/launches
+hostapd/dnsmasq; interface creation and
 NetworkManager managed-state handling use [Rust device ownership](native-device-ownership.md). Rust owns
 [firewall transactions](native-firewall.md) and
 [AP setup/forwarding transactions](native-network-state.md). No networking engine or desktop component was installed or activated
@@ -30,7 +31,8 @@ The Rust actions are `save`, `load`, `record-child`, `stop-children`,
 `check-interfaces` and `verify-cleanup`, plus `firewall-add`, `firewall-remove` and
 `firewall-check`, `interface-configure`, `interface-remove`, `forwarding-enable`,
 `forwarding-release`, `network-check`, `interface-create`, `device-fields`,
-`device-release` and `device-restore`. They run before D-Bus registration.
+`device-release` and `device-restore`. Daemon actions are `daemons-configure`,
+`daemons-run`, `daemon-exec` and `daemons-leases`. They run before D-Bus registration.
 Production actions require root and accept only instance/common directories in
 the fixed private engine runtime. There is no generic subprocess executor or
 unrestricted recovery-directory override. The supervisor still selects exact

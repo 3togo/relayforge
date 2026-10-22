@@ -60,16 +60,14 @@ runtime save "$CONFDIR" "$$" "${args[@]}"
 state=$(runtime interface-create "$CONFDIR")
 eval "$state"
 runtime device-release "$CONFDIR"
+daemon_state=$(runtime daemons-configure "$CONFDIR" 1 2.4 nl80211)
+eval "$daemon_state"
 runtime interface-configure "$CONFDIR"
 runtime forwarding-enable "$CONFDIR"
 for phase in nat dns dhcp; do runtime firewall-add "$CONFDIR" "$phase"; done
-printf 'fixture\n' > "$CONFDIR/hostapd.conf"
-"$root/bin/hostapd" "$CONFDIR/hostapd.conf" &
-printf '%s\n' "$!" > "$CONFDIR/hostapd.pid"
-for ((i=0; i<100; i++)); do [[ -e "$CONFDIR/hostapd.conf.ready" ]] && break; sleep .01; done
-runtime record-child "$CONFDIR/hostapd.pid" hostapd
 stop_owned() { cleanup_owned; exit $?; }
 trap stop_owned SIGUSR1 SIGTERM
 printf '%s\n' "$$" > "$DAEMON_PIDFILE"
-printf '%s\n' "$$" > "$DAEMON_PIDFILE.ready"
-while :; do sleep .05; done
+runtime daemons-run "$CONFDIR" &
+DAEMONS_PID=$!
+wait "$DAEMONS_PID"

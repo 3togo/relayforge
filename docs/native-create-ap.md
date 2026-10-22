@@ -8,10 +8,10 @@ Python D-Bus/GLib worker is never constructed in this mode.
 
 Rust also implements snapshots and child recovery through the
 [native recovery runtime](native-recovery.md). A generated adapter of the pinned
-Bash script configures/launches hostapd and dnsmasq, and
-calls Rust for recovery, [firewall transactions](native-firewall.md) and
-[AP setup/forwarding transactions](native-network-state.md), and
-[interface creation/NetworkManager ownership](native-device-ownership.md). Neither native service mode
+Bash script delegates recovery, [firewall rules](native-firewall.md),
+[AP setup/forwarding](native-network-state.md),
+[device ownership](native-device-ownership.md), and
+[daemon configuration/launch](native-daemons.md) to Rust. Neither native service mode
 requires a Python backend; the original compatibility mode remains available.
 
 ## Startup and ownership
@@ -117,4 +117,4 @@ or rollback. The current Wi-Fi connection and installed service remain untouched
 AP setup/teardown and forwarding leases are now delegated to
 [Rust network transactions](native-network-state.md). Interface creation and
 NetworkManager release/restoration also use [Rust device ownership](native-device-ownership.md);
-daemon configuration/launch remain Bash.
+daemon configuration/launch now use the [Rust daemon runtime](native-daemons.md).

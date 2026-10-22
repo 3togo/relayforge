@@ -1,4 +1,5 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
+mod daemons;
 mod network;
 use crate::{
     ap_firewall::{Executor, Plan, Simulator},
@@ -219,6 +220,9 @@ impl Directory {
     }
     fn write<T: Serialize>(&self, name: &str, value: &T, expected: Option<&[u8]>) -> Result<()> {
         let bytes = serde_json::to_vec(value).map_err(|_| "Cannot serialize recovery data")?;
+        self.write_bytes(name, &bytes, expected)
+    }
+    fn write_bytes(&self, name: &str, bytes: &[u8], expected: Option<&[u8]>) -> Result<()> {
         if bytes.len() > LIMIT {
             return Err("Oversized recovery data");
         }
@@ -240,7 +244,7 @@ impl Directory {
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
         let result = (|| {
-            file.write_all(&bytes)
+            file.write_all(bytes)
                 .and_then(|_| file.sync_all())
                 .map_err(|_| "Cannot persist recovery data")?;
             if self.read(name, true, LIMIT)?.as_deref() != expected {
@@ -792,8 +796,8 @@ async fn stop(identity: &Identity) -> Result<()> {
     Err("Owned child did not exit")
 }
 async fn stop_children(p: &Platform, dir: &Directory) -> Result<()> {
+    let mut failure = daemons::stop_all(p, dir).await.err();
     dir.entries()?;
-    let mut failure = None;
     // Quiesce every verified child even if another record prevents full cleanup.
     for (stem, exe) in CHILDREN {
         let result = async {
@@ -834,6 +838,17 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
     };
     let dir = p.open(parent, matches!(action, "record-child" | "stop-children"))?;
     match action {
+        "daemons-configure" if values.len() == 3 => daemons::configure(p, &dir, values).await,
+        "daemons-leases" if values.is_empty() => String::from_utf8(daemons::read_leases(p, &dir)?)
+            .map_err(|_| "Invalid DNS lease encoding"),
+        "daemons-run" if values.is_empty() => {
+            daemons::run(p, &dir).await?;
+            Ok(String::new())
+        }
+        "daemon-exec" if values.len() == 1 => {
+            daemons::exec(p, &dir, &values[0]).await?;
+            Ok(String::new())
+        }
         "save" => {
             let (pid, values) = values.split_first().ok_or("Missing owner PID")?;
             let observed =
@@ -991,6 +1006,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
         }
         "verify-cleanup" if values.is_empty() => {
             let (data, _) = snapshot(p, &dir)?;
+            daemons::check(p, &dir)?;
             network::run(p, &dir, "network-check").await?;
             for name in dir.entries()? {
                 if let Some(stem) = name.strip_suffix(".pid") {
@@ -1048,6 +1064,12 @@ pub async fn run(args: &[String], fixture: bool) -> Result<String> {
     }
     action(&platform, name, Path::new(path), values).await
 }
+pub(crate) fn daemon_leases(path: &Path, fixture: Option<&Path>) -> Result<Vec<u8>> {
+    let platform = Platform::new(fixture)?;
+    let dir = platform.open(path, false)?;
+    daemons::read_leases(&platform, &dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

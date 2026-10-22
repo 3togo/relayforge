@@ -259,7 +259,7 @@ impl Platform {
             Duration::from_secs(3),
         )
         .await?;
-        let leases = private_read(&directory.join("dnsmasq.leases"), 65536, 0)?.unwrap_or_default();
+        let leases = crate::ap_runtime::daemon_leases(directory, None)?;
         let leases = String::from_utf8(leases).map_err(|_| "Invalid DHCP lease data")?;
         let mut addresses = BTreeMap::new();
         for line in leases.lines() {

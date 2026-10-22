@@ -5,8 +5,9 @@ iptables execution, rule removal and absence checks to Rust. The public desktop
 methods, signals, status and authorization remain unchanged. Neither this change
 nor staging installs a service, activates sharing or changes an existing network.
 
-This is one complete extraction from the Bash engine. Hostapd/dnsmasq configuration
-and launch and optional module loading still use the generated Bash adapter.
+This is one complete extraction from the Bash engine. [Daemon configuration and
+launch](native-daemons.md) now use Rust; optional module loading and adapter
+housekeeping remain Bash.
 [Device ownership](native-device-ownership.md) now handles interface creation and
 NetworkManager managed-state restoration. [Rust network transactions](native-network-state.md)
 now own AP setup/teardown and forwarding sysctl leases. Native mode continues to decline
@@ -91,5 +92,5 @@ Live iptables variants, kernel behavior, distribution firewall interaction,
 DHCP/DNS/NAT connectivity, upgrade/rollback and driver behavior still require a
 controlled hardware window. Use the previous matching payload to Stop and confirm
 cleanup before changing a live installation; do not bypass a pending journal.
-Daemon configuration/launch remain future extractions. See [native recovery](native-recovery.md) and
+Daemon configuration/launch now use the [Rust daemon runtime](native-daemons.md). See [native recovery](native-recovery.md) and
 [create_ap supervision](native-create-ap.md) for the retained operational limits.

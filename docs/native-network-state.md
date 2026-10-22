@@ -57,7 +57,9 @@ lock against administrator changes to kernel settings.
 
 [Rust device ownership](native-device-ownership.md) now allocates/creates virtual
 interfaces and releases/restores their NetworkManager managed state. The generated
-adapter still renders and launches hostapd/dnsmasq and loads optional modules. Bridge sharing, band switching, COUNTRY overrides and
+adapter retains option parsing, compatibility checks, instance markers and optional
+modules. [Rust daemon supervision](native-daemons.md) now renders and launches
+hostapd/dnsmasq. Bridge sharing, band switching, COUNTRY overrides and
 automatic resume remain unsupported in native create_ap mode. The immutable
 vendor snapshot and compatibility backend are unchanged.
 

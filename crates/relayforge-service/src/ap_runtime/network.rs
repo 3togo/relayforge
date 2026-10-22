@@ -1051,3 +1051,25 @@ pub(super) async fn run(p: &Platform, dir: &Directory, operation: &str) -> Resul
         _ => Err("Unknown network transaction"),
     }
 }
+
+pub(super) async fn daemon_permit(p: &Platform, dir: &Directory) -> Result<()> {
+    let _lock = dir.transaction_lock(c".network.lock").await?;
+    let (data, _) = snapshot(p, dir)?;
+    data.interfaces(p)?;
+    devices::require_release(p, dir, &data).await?;
+    let bytes = dir
+        .read("interface.json", true, LIMIT)?
+        .ok_or("Configure the AP before launching daemons")?;
+    let intent: InterfaceIntent =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid interface setup proof")?;
+    intent.validate(&data)?;
+    let current = Kernel { p }
+        .inspect(&intent.iface)
+        .await?
+        .ok_or("AP disappeared before daemon launch")?;
+    intent.check_current(&current)?;
+    if intent.restored || current.kind != "AP" || !current.addresses.contains(&intent.gateway) {
+        return Err("AP setup is incomplete");
+    }
+    Ok(())
+}

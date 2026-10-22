@@ -69,8 +69,9 @@ cleanup before upgrading an active installation.
 
 ## Remaining boundary
 
-Bash still parses create_ap options, renders hostapd/dnsmasq configuration,
-launches those daemons and loads optional modules. The native generated adapter
+Bash still parses create_ap options, runs compatibility checks, manages instance
+markers and loads optional modules. [Rust daemon supervision](native-daemons.md)
+now renders hostapd/dnsmasq configuration and launches their foreground processes. The native generated adapter
 has no Bash allocation functions, unmanaged-device helpers, nmcli calls,
 interface-add commands, networking sysctl accesses or direct iptables commands.
 It stages seven payload files without changing system activation.

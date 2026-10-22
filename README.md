@@ -16,7 +16,9 @@ helper. [Rust firewall transactions](docs/native-firewall.md) now own NAT/DNS/DH
 rules. [Rust network transactions](docs/native-network-state.md) now own AP setup,
 teardown and forwarding leases. [Rust device ownership](docs/native-device-ownership.md)
 now handles interface creation and NetworkManager release/restoration. The native
-payload retains a Bash adapter for daemon configuration/launch and optional modules.
+[daemon runtime](docs/native-daemons.md) now renders and launches hostapd/dnsmasq,
+with gated child recovery and private leases. Bash retains option parsing,
+compatibility checks, instance markers and optional module loading.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 

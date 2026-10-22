@@ -170,6 +170,25 @@ def native_engine(source):
             '    die\nfi\n\nclean_exit\n','')
     if any(value in text for value in ('networkmanager_', 'alloc_new_iface', 'dealloc_iface', 'interface add', 'NetworkManager.conf')):
         raise ValueError('Native adapter retains Bash device ownership operations')
+    section('# hostapd config\n','# Rust journals the baseline before configuring the recorded AP.\n',
+            'daemon_state=$("$RUNTIME_HELPER" --create-ap-runtime daemons-configure "$CONFDIR" "$CHANNEL" "$FREQ_BAND" "$DRIVER") || die\n'
+            'eval "$daemon_state"\n\n')
+    launch=('      umask 0033\n'
+            '      dnsmasq -C $CONFDIR/dnsmasq.conf -x $CONFDIR/dnsmasq.pid -l $CONFDIR/dnsmasq.leases -p $DNS_PORT || die\n'
+            '      umask $SCRIPT_UMASK\n'
+            '      record_child "$CONFDIR/dnsmasq.pid" dnsmasq || die "Could not record dnsmasq identity."\n')
+    if text.count(launch)!=1:
+        raise ValueError('Pinned DNS launch boundary changed')
+    text=text.replace(launch,'      : # Rust launches and supervises the foreground DNS daemon below.\n')
+    section('# start access point\n','\nclean_exit\n',
+            '# Rust owns both daemon children and the readiness acknowledgement.\n'
+            '[[ $NO_HAVEGED -eq 1 ]] || die "Native mode requires --no-haveged."\n'
+            '"$RUNTIME_HELPER" --create-ap-runtime daemons-run "$CONFDIR" &\n'
+            'DAEMONS_PID=$!\n'
+            'wait "$DAEMONS_PID" || die "Native daemon supervision failed."\n')
+    section('# start haveged when needed\n','CHANNEL=default\n','')
+    if any(value in text for value in ('cat << EOF > $CONFDIR/hostapd.conf', 'cat << EOF > $CONFDIR/dnsmasq.conf', 'dnsmasq -C ', '$HOSTAPD $HOSTAPD_DEBUG_ARGS', 'wait_for_ap()')):
+        raise ValueError('Native adapter retains Bash daemon configuration or launch')
     return text.encode('utf-8')
 
 

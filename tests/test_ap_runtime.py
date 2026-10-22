@@ -327,8 +327,9 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
         state=context.state
         (state/'runtime-bin').symlink_to(BINARY)
         (state/'bin').mkdir(mode=0o700)
-        shutil.copyfile(CHILD,state/'bin/hostapd')
-        (state/'bin/hostapd').chmod(0o700)
+        for name in ('hostapd','dnsmasq'):
+            shutil.copyfile(CHILD,state/'bin'/name)
+            (state/'bin'/name).chmod(0o700)
         (state/'net').mkdir(mode=0o700)
         (state/'net/demo0').mkdir()
         (state/'net/demo0/ifindex').write_text('7\n')
@@ -449,3 +450,30 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
                     self.assertEqual(final['interfaces'],before['interfaces'])
                     self.assertEqual(final['nm']['devices'],before['nm']['devices'])
                     self.assertFalse(list((context.state/'engine').glob('create_ap.demo0.conf.*')))
+
+    def test_native_daemon_startup_failures_reach_desktop_and_remove_owned_resources(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply
+        for controls in [dict(fail_child='hostapd'),dict(fail_child='dnsmasq'),dict(ready=False)]:
+            with self.subTest(controls=controls),supervised_bench() as context:
+                self.prepare(context);private(context.state/'daemon-controls.json',controls)
+                with self.service(context) as (bus,_):
+                    self.assertFalse(decode_reply('Start',call(bus,'Start'))['success'])
+                    self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                    self.assertFalse((context.state/'create-ap.json').exists())
+                    self.assertEqual(set(json.loads((context.state/'network-state.json').read_text())['interfaces']),{'demo0'})
+                    self.assertFalse(list((context.state/'leases').iterdir()))
+                    self.assertEqual(len(json.loads((context.state/'firewall-state.json').read_text())['rules']),1)
+
+    def test_native_dns_exit_after_readiness_becomes_failed_and_cleans_up(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply,wait_for
+        with supervised_bench() as context:
+            self.prepare(context);private(context.state/'daemon-controls.json',dict(exit_child='dnsmasq',exit_ms=800))
+            with self.service(context) as (bus,_):
+                self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
+                wait_for(lambda:decode_reply('GetStatus',call(bus,'GetStatus'))['state']=='failed')
+                self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                self.assertFalse((context.state/'create-ap.json').exists())
+                self.assertEqual(set(json.loads((context.state/'network-state.json').read_text())['interfaces']),{'demo0'})
+                self.assertFalse(list((context.state/'leases').iterdir()))

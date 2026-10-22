@@ -89,14 +89,14 @@ journals, recovery and automatic resume policy.
    do not prove driver or NM extension compatibility on a physical machine.
 5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
    client reports, cancellation and owned recovery. The pinned Bash networking
-   adapter retains daemon configuration/launch and optional module loading;
-   snapshot/child recovery, NAT/DNS/DHCP firewall transactions, AP creation/setup/
-   teardown, NetworkManager managed-state handling and shared forwarding leases
-   are now Rust. See
+   adapter retains option parsing, compatibility checks, instance housekeeping
+   and optional module loading; snapshot/child recovery, firewall transactions,
+   AP creation/setup/teardown, NetworkManager managed-state handling, forwarding,
+   and daemon rendering/launch/readiness are now Rust. See
    [create_ap supervision](native-create-ap.md) and [native recovery](native-recovery.md).
    Compatibility mode remains until
    feature parity is demonstrated. See [firewall extraction](native-firewall.md);
-   daemon launch/configuration remain shell extractions.
+   daemon launch/configuration now use the [Rust runtime](native-daemons.md).
 6. A native service, bus activation and policy payload can now be staged for
    review. Distribution packages, deployed upgrade/rollback validation and
    additional service hardening remain pending. Physical DHCP, DNS, verified
@@ -122,4 +122,5 @@ validated. The laptop's existing Wi-Fi remains untouched by native activation.
 Native create_ap [network transactions](native-network-state.md) now own AP
 link/type/address setup, teardown and shared forwarding sysctl restoration.
 [Rust device ownership](native-device-ownership.md) now handles interface creation
-and NetworkManager managed-state restoration; daemon operations remain in the adapter.
+and NetworkManager managed-state restoration. [Rust daemon supervision](native-daemons.md)
+now handles configuration, launch, readiness and private leases.
