@@ -136,6 +136,8 @@ subsequent NAT/DNS/DHCP rule migration and failure-injection checks. The
 the next Rust extraction and its interrupted-transaction and desktop checks. The
 [device ownership report](docs/native-device-ownership-validation.md) records
 interface creation and NetworkManager restoration, including private-bus checks.
+The [daemon runtime report](docs/native-daemons-validation.md) records native
+configuration, gated launch, readiness, private leases and desktop failure checks.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
