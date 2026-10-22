@@ -22,7 +22,9 @@ now enforce the frozen plan and driver policy through launch. The
 [Rust instance runner](docs/native-instance.md) owns options, instance markers,
 signals and housekeeping; native staging includes an ELF helper instead of Bash.
 The [backend audit](docs/backend-audit.md) adds connected-subnet collision checks
-and durable recovery from interrupted final cleanup.
+and durable recovery from interrupted final cleanup. Its
+[validation report](docs/backend-audit-validation.md) records the exact candidate
+and offline results.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
