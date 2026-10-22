@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Relay Tray
+Comment=Show Wi-Fi Relay desktop controls
+Exec=wifi-hotspot-tray --show-icon
+TryExec=wifi-hotspot-tray
+Icon=io.github.erhanzeyrek.WifiHotspot
+Terminal=false
+Categories=Network;
+StartupNotify=false

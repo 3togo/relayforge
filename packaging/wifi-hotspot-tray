@@ -1,0 +1,6 @@
+#!/bin/sh
+# Explicit launches show the icon; login launches pass --session-start instead.
+if [ "$#" -eq 0 ]; then
+    set -- --show-icon
+fi
+exec /usr/bin/python3 /usr/lib/relayforge/settings/tray.py "$@"

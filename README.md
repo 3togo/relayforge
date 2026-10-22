@@ -65,6 +65,66 @@ dbus-run-session -- /usr/bin/python3 -m unittest discover -s tests -v
 Tests use a disposable session bus and simulated networking. They do not install
 packages, start a hotspot, change the firewall, or use a physical Wi-Fi adapter.
 
+## Build a Debian package
+
+On the target Debian/Ubuntu distribution and architecture, install the build
+prerequisites: Rust 1.97+, Python 3.11+, and `dpkg-dev`. Then run as an ordinary
+user from the repository root:
+
+```sh
+./tools/build-deb.sh
+# Alternative native backend:
+./tools/build-deb.sh --backend create_ap --version 0.1.0~preview1
+```
+
+The script builds the locked release executable and writes a `.deb` under
+`artifacts/deb/`. Use `--output-dir PATH` to change the destination, or
+`--binary /absolute/path/relayforge-service` to package an existing release ELF
+without invoking Cargo. Existing packages are never overwritten. Each package
+contains one selected backend, the GTK settings/tray code, settings and tray
+launchers, a login autostart entry, D-Bus/Polkit policies and its systemd unit.
+GTK3 and Ayatana AppIndicator support are required package dependencies.
+GNOME Shell extensions and patched
+desktop integrations are not included. Shared-library dependencies are calculated
+with `dpkg-shlibdeps`; generate packages on the target distribution rather than
+assuming a binary built on a newer distribution will work on an older one.
+
+Installation does not generate credentials, enable or start a service. In a
+prepared test environment, install the package with `sudo apt install ./PATH.deb`.
+For a fresh NetworkManager installation, choose the real Wi-Fi interface and run:
+
+```sh
+sudo /usr/lib/relayforge/relayforge-service --init-config /etc/wifi-hotspot.conf \
+  --wifi-interface wlp2s0 --backend networkmanager
+sudo systemctl daemon-reload
+sudo systemctl start relayforge-native.service
+wifi-hotspot-settings
+```
+
+The tray starts automatically at your next graphical login. To start it now,
+run `wifi-hotspot-tray` as your desktop user (without sudo), or open **Wi-Fi
+Relay Tray** from the application menu. Login startup honors the saved
+`Start desktop controls at login` preference and icon visibility preference.
+The panel needs AppIndicator/StatusNotifier support; on GNOME, an enabled
+AppIndicator extension is needed to display this tray. The package does not
+install or enable a GNOME extension. You can disable package autostart per user
+by creating `~/.config/autostart/relayforge-tray.desktop` containing:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Relay Tray
+Hidden=true
+```
+
+For a `create_ap` package, initialize with `--backend create_ap` and start
+`relayforge-create-ap.service`. Existing configuration is preserved; its backend
+must match the selected service. Stop the old service and finish owned network
+cleanup before upgrading or switching backends, then reload systemd and start the
+selected service manually. Remove/reconfigure conflicting Wi-Fi Relay packages
+before installation; their D-Bus identity and desktop paths overlap. The native
+hardware-validation limits described below still apply to these packages.
+
 ## Try the reused desktop controls
 
 On a machine with GTK4/libadwaita and a graphical session:
@@ -163,8 +223,9 @@ option parsing, signal cleanup, directory ownership, housekeeping and ELF stagin
 
 The Rust [offline deployment engine](docs/native-deployment.md) can apply and roll
 back a staged payload in a dormant image. It refuses the live root and never enables
-or starts services. No distribution package release or live service handover is
-supplied. Staging itself only creates a reviewable payload. Native hotspot activation
+or starts services. The Debian build script creates a local package; no
+distribution package release or automatic live service handover is supplied.
+Staging itself only creates a reviewable payload. Native hotspot activation
 has not been tested on physical hardware. Run only
 in a prepared disposable environment until the migration and hardware gates in
 [the architecture plan](docs/architecture.md) are completed. The original

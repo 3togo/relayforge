@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Relay Tray
+Comment=Start Wi-Fi Relay desktop controls at login
+Exec=wifi-hotspot-tray --session-start
+TryExec=wifi-hotspot-tray
+Icon=io.github.erhanzeyrek.WifiHotspot
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
