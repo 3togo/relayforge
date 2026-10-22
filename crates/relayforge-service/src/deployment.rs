@@ -75,10 +75,15 @@ struct State {
     current: Snapshot,
     previous: Option<Snapshot>,
     pending: Option<Snapshot>,
+    // Old version-1 receipts default to forward recovery. Persist an abort before
+    // restoring any files so a second interruption cannot reverse that decision.
+    #[serde(default)]
+    aborting: bool,
 }
 impl State {
     fn validate(&self, root: &Root) -> Result<()> {
         if self.version != 1
+            || self.aborting && self.pending.is_none()
             || self.root != root.identity()?
             || !matches!(self.backend.as_str(), "networkmanager" | "create_ap")
         {
@@ -265,18 +270,28 @@ fn configuration(root: &Root, backend: &str) -> Result<()> {
     }
     Ok(())
 }
-fn quiescent(root: &Root) -> Result<Vec<File>> {
+fn quiescent(root: &Root, reserve: bool, fixture: bool) -> Result<Vec<File>> {
     let mut locks = vec![];
-    if root.entries("run/relayforge")?.iter().any(|v| v != ".lock")
-        || !root.entries("run/wifi-relay")?.is_empty()
-    {
-        return Err(
+    let check = || -> Result<()> {
+        if root.entries("run/relayforge")?.iter().any(|v| v != ".lock")
+            || !root.entries("run/wifi-relay")?.is_empty()
+        {
+            return Err(
             "Pending networking evidence blocks deployment; use matching old service for cleanup",
         );
+        }
+        Ok(())
+    };
+    check()?;
+    fault(fixture, root, "runtime-scan")?;
+    if reserve {
+        root.private_dir("run/relayforge")?;
     }
-    if root.read("run/relayforge/.lock", 64)?.is_some() {
+    if reserve || root.read("run/relayforge/.lock", 64)?.is_some() {
         locks.push(root.lock("run/relayforge/.lock")?);
     }
+    // Evidence may have appeared between the first scan and lock acquisition.
+    check()?;
     Ok(locks)
 }
 fn store_blobs(root: &Root, blobs: &BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -338,12 +353,30 @@ fn fault(fixture: bool, root: &Root, phase: &str) -> Result<()> {
             if value["after"] == phase {
                 return Err("Simulated offline deployment interruption");
             }
+            if value["pause"] == phase {
+                root.write(
+                    "deployment-paused",
+                    &Data {
+                        bytes: phase.as_bytes().to_vec(),
+                        mode: 0o600,
+                        gid: unsafe { libc::getegid() },
+                    },
+                )?;
+                let start = std::time::Instant::now();
+                while root.read("deployment-continue", 64)?.is_none() {
+                    if start.elapsed() > std::time::Duration::from_secs(10) {
+                        return Err("Timed out waiting for fixture continuation");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
         }
     }
     Ok(())
 }
-fn apply(root: &Root, state: &mut State, abort: bool, fixture: bool) -> Result<()> {
+fn apply(root: &Root, state: &mut State, fixture: bool) -> Result<()> {
     let pending = state.pending.as_ref().ok_or("No pending deployment")?;
+    let abort = state.aborting;
     let destination = if abort { &state.current } else { pending };
     let files = materialize(root, destination)?;
     let (actual, _) = capture(root)?;
@@ -361,6 +394,9 @@ fn apply(root: &Root, state: &mut State, abort: bool, fixture: bool) -> Result<(
                 root.remove(path)?;
             }
         }
+        // A previous process may have published this name and died before its
+        // directory sync. Matching bytes alone are not evidence of durability.
+        root.sync_path(path)?;
         fault(fixture, root, &format!("file-{index}"))?;
     }
     fault(fixture, root, "files")?;
@@ -372,6 +408,7 @@ fn apply(root: &Root, state: &mut State, abort: bool, fixture: bool) -> Result<(
         state.previous = Some(std::mem::replace(&mut state.current, next));
     }
     state.pending = None;
+    state.aborting = false;
     save(root, state)?;
     fault(fixture, root, "commit")
 }
@@ -397,7 +434,7 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
     let payload = source
         .map(|path| payload(Path::new(path), uid))
         .transpose()?;
-    let _runtime_locks = quiescent(&root)?;
+    let _runtime_locks = quiescent(&root, !matches!(action, "plan" | "status"), fixture)?;
     let mut state = load(&root)?;
     let (before, before_blobs) = capture(&root)?;
     if let Some(state) = &state {
@@ -438,6 +475,7 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
     root.private_dir(STATE)?;
     root.private_dir(&format!("{STATE}/blobs"))?;
     let _lock = root.lock(&format!("{STATE}/.lock"))?;
+    fault(fixture, &root, "locked")?;
     // Re-read after locking; a competing deployment may have committed while we prepared.
     state = load(&root)?;
     let (actual, _) = capture(&root)?;
@@ -481,6 +519,7 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
             },
             previous: None,
             pending: None,
+            aborting: false,
         });
         current.pending = Some(Snapshot {
             id: random_secret()?,
@@ -488,7 +527,7 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
         });
         save(&root, &current)?;
         fault(fixture, &root, "journal")?;
-        apply(&root, &mut current, false, fixture)?;
+        apply(&root, &mut current, fixture)?;
         println!(
             "{}",
             json!({"success":true,"revision":current.current.id,"configuration":"preserved","activated":false})
@@ -504,17 +543,26 @@ pub(crate) fn run(args: &[String], fixture: bool) -> Result<()> {
         return Ok(());
     }
     if action == "rollback" && state.pending.is_none() {
-        state.pending = Some(
-            state
-                .previous
-                .clone()
-                .ok_or("No rollback snapshot exists")?,
-        );
+        let previous = state
+            .previous
+            .clone()
+            .ok_or("No rollback snapshot exists")?;
+        // Refuse an unusable rollback before replacing the stable receipt.
+        materialize(&root, &previous)?;
+        configuration(&root, &state.backend)?;
+        state.pending = Some(previous);
         save(&root, &state)?;
         fault(fixture, &root, "journal")?;
-        apply(&root, &mut state, false, fixture)?;
+        apply(&root, &mut state, fixture)?;
     } else {
-        apply(&root, &mut state, action == "rollback", fixture)?;
+        if action == "rollback" && !state.aborting {
+            materialize(&root, &state.current)?;
+            configuration(&root, &state.backend)?;
+            state.aborting = true;
+            save(&root, &state)?;
+            fault(fixture, &root, "abort-journal")?;
+        }
+        apply(&root, &mut state, fixture)?;
     }
     println!(
         "{}",

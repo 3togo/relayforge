@@ -58,6 +58,9 @@ an advisory snapshot; install revalidates under its deployment lock. `status`
 reports the current receipt revision, pending transaction and rollback availability.
 Neither prints credentials. Every command checks for pending networking evidence;
 none removes it to force an upgrade. A held native runtime lock also blocks work.
+Mutating commands reserve the native runtime lock even when it did not exist,
+keep it until completion, and rescan networking evidence after acquisition.
+The private runtime directory and unlocked lock file are retained in the image.
 Use the previous matching service/helper to finish resource cleanup first.
 
 ## Managed files and payload verification
@@ -100,18 +103,30 @@ Install captures and verifies the complete old payload, saves all before/after
 blobs, then syncs a pending receipt before publishing files. Each replacement uses
 a new temporary, restores its group/mode, fsyncs it, renames it and fsyncs its parent.
 The shared D-Bus activation file is published last. The current/previous receipt
-changes only after every destination is verified. File rollback is a transaction,
-not an atomic multi-file switch: the root must stay offline throughout.
+changes only after every destination is verified. Recovery syncs every destination
+and its parent even if its bytes already
+match: the interrupted publisher may have died before syncing the rename.
+File rollback is a transaction, not an atomic multi-file switch: the root must
+stay offline throughout.
 
 After interruption:
 
-- `recover` finishes the pending target; with no pending transaction it is a no-op.
+- `recover` finishes the recorded direction; with no pending transaction it is a no-op.
 - `rollback` while pending aborts that transaction and restores its original files,
-  retaining the older rollback snapshot.
+  retaining the older rollback snapshot. The abort decision is synced before
+  restoring files. Further interruptions, `recover`, and repeated pending
+  `rollback` commands continue that abort rather than resume the rejected upgrade.
 - `rollback` on a completed deployment restores its preceding snapshot. The
   displaced snapshot becomes the new rollback target, so a later explicit
   rollback can switch back. Inspect status after an error before choosing direction.
 - Reinstalling an identical payload is a no-op and preserves the rollback point.
+
+A completed deployment's rollback target and configuration are checked before
+publishing a pending rollback receipt. Missing backups or invalid configuration
+therefore leave the stable receipt intact. Version-1 receipts without the new
+`aborting` field retain forward-recovery semantics. New receipts include the field;
+older installers reject them through their strict schema instead of guessing the
+recovery direction. Keep the matching installer available for recovery.
 
 Changed installed files, unsafe metadata, corrupt receipts, missing/changed blobs,
 unknown record paths and pending networking evidence block mutation. Recovery

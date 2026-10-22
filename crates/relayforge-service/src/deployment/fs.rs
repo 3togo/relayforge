@@ -269,6 +269,17 @@ impl Root {
         }
         sync(&parent)
     }
+    pub fn sync_path(&self, path: &str) -> Result<()> {
+        let Some((parent, file)) = self.parent(path, false)? else {
+            return Ok(());
+        };
+        if let Some(handle) = open(&parent, &file, libc::O_RDONLY, 0)? {
+            handle
+                .sync_all()
+                .map_err(|_| "Cannot sync recovered deployment file")?;
+        }
+        sync(&parent)
+    }
     pub fn lock(&self, path: &str) -> Result<File> {
         let (parent, file) = self.parent(path, true)?.ok_or("Missing lock parent")?;
         let handle = open(&parent, &file, libc::O_RDWR | libc::O_CREAT, 0o600)?

@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from test_dbus import BINARY
 from test_staging import staging
@@ -66,12 +67,101 @@ def image(backend='create_ap'):
     with tempfile.TemporaryDirectory(prefix='relayforge-deploy-') as directory:yield Image(directory,backend)
 
 class DeploymentTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def paused(self, c, phase):
+        control=c.root/'deployment-fault.json'
+        control.write_text(json.dumps({'pause':phase}));control.chmod(0o600)
+        process=subprocess.Popen([str(BINARY),'--test-deploy','install','--root',str(c.root),'--payload',str(c.payload)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            deadline=time.monotonic()+5
+            while not (c.root/'deployment-paused').exists():
+                if process.poll() is not None:raise AssertionError(process.communicate())
+                if time.monotonic()>deadline:raise AssertionError('Fixture failed to pause')
+                time.sleep(.01)
+            yield process
+        finally:
+            continuation=c.root/'deployment-continue'
+            # Publish a fully protected control, rather than exposing a transient
+            # default-umask file to the process polling it.
+            temporary=c.root/'continuation.tmp'
+            temporary.write_text('continue');temporary.chmod(0o600)
+            temporary.rename(continuation)
+            try:process.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill();process.communicate();raise
+
+    def test_interrupted_abort_keeps_its_direction_and_older_rollback(self):
+        for phase in ['abort-journal',*[f'file-{n}' for n in range(8)],'files','commit']:
+            with self.subTest(phase=phase),image() as c:
+                baseline=c.files();c.invoke('install',c.payload);v1=c.files()
+                c.fault('files');c.invoke('install',c.stage('v2'),ok=False)
+                c.fault(phase);c.invoke('rollback',ok=False)
+                c.fault(None);c.invoke('recover');self.assertEqual(c.files(),v1)
+                c.invoke('recover');self.assertEqual(c.files(),v1)
+                c.invoke('rollback');self.assertEqual(c.files(),baseline);c.preserved(self)
+
+    def test_first_install_abort_survives_repeated_interruption(self):
+        with image() as c:
+            baseline=c.files();c.fault('files');c.invoke('install',c.payload,ok=False)
+            c.fault('file-0');c.invoke('rollback',ok=False)
+            c.fault('file-1');c.invoke('recover',ok=False)
+            c.invoke('rollback',ok=False)
+            c.fault(None);c.invoke('recover');self.assertEqual(c.files(),baseline)
+            self.assertFalse(json.loads(c.invoke('status').stdout)['pending']);c.preserved(self)
+
+    def test_unusable_rollback_does_not_publish_a_pending_receipt(self):
+        for change in ['blob','configuration']:
+            with self.subTest(change=change),image() as c:
+                c.invoke('install',c.payload);c.invoke('install',c.stage('v2'))
+                record=c.root/STATE/'state.json';saved=record.read_bytes();before=c.files()
+                if change=='blob':
+                    data=json.loads(saved);(c.root/STATE/'blobs'/data['previous']['files'][SERVICE]['sha256']).unlink()
+                else:c.config.unlink()
+                c.invoke('rollback',ok=False);self.assertEqual(record.read_bytes(),saved)
+                self.assertEqual(c.files(),before)
+                self.assertFalse(json.loads(c.invoke('status').stdout)['pending'])
+
+    def test_new_runtime_lock_excludes_backend_and_competing_deployments(self):
+        with image() as c:
+            self.assertFalse((c.root/'run/relayforge/.lock').exists())
+            with self.paused(c,'locked') as process:
+                lock=c.root/'run/relayforge/.lock'
+                self.assertEqual(lock.parent.stat().st_mode&0o777,0o700)
+                with lock.open('r+') as handle:
+                    with self.assertRaises(BlockingIOError):fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                c.invoke('install',c.payload,ok=False);c.invoke('rollback',ok=False)
+                self.assertFalse((c.root/STATE/'state.json').exists())
+            self.assertEqual(process.returncode,0)
+            c.fault(None);c.invoke('rollback');c.preserved(self)
+
+    def test_network_evidence_created_after_scan_blocks_publication(self):
+        for backend in ['native','legacy']:
+            with self.subTest(backend=backend),image() as c:
+                with self.paused(c,'runtime-scan') as process:
+                    runtime=c.root/('run/relayforge' if backend=='native' else 'run/wifi-relay')
+                    runtime.mkdir(parents=True,mode=0o700)
+                    evidence=runtime/'retained.json';evidence.write_text('retained')
+                self.assertNotEqual(process.returncode,0)
+                self.assertEqual(evidence.read_text(),'retained')
+                self.assertFalse((c.root/STATE).exists())
+                self.assertTrue(all(value is None for value in c.files().values()));c.preserved(self)
+
+    def test_legacy_receipts_default_to_forward_recovery_and_invalid_abort_is_refused(self):
+        with image() as c:
+            c.fault('file-0');c.invoke('install',c.payload,ok=False);c.fault(None)
+            record=c.root/STATE/'state.json';data=json.loads(record.read_text());data.pop('aborting')
+            record.write_text(json.dumps(data));c.invoke('recover')
+            self.assertEqual((c.root/SERVICE).read_bytes(),(c.payload/SERVICE).read_bytes())
+            data=json.loads(record.read_text());data['aborting']=True;record.write_text(json.dumps(data))
+            before=c.files();c.invoke('recover',ok=False);self.assertEqual(c.files(),before)
+
     def test_plan_is_read_only_and_native_install_preserves_configuration_and_controls(self):
         for backend in ['create_ap','networkmanager']:
             with self.subTest(backend=backend),image(backend) as c:
                 before=c.files();plan=json.loads(c.invoke('plan',c.payload).stdout)
                 self.assertEqual(plan['backend'],backend);self.assertEqual(c.files(),before)
                 self.assertFalse((c.root/STATE).exists())
+                self.assertFalse((c.root/'run').exists())
                 result=json.loads(c.invoke('install',c.payload).stdout);self.assertFalse(result['activated'])
                 manifest=json.loads((c.payload/'manifest.json').read_text())
                 for path,entry in manifest.items():
