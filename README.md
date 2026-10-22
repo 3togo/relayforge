@@ -143,6 +143,8 @@ The [daemon runtime report](docs/native-daemons-validation.md) records native
 configuration, gated launch, readiness, private leases and desktop failure checks.
 The [startup radio report](docs/native-startup-radio-validation.md) records the
 subsequent driver/channel extraction, baseline checks and desktop rejection test.
+The [instance runner report](docs/native-instance-validation.md) records native
+option parsing, signal cleanup, directory ownership, housekeeping and ELF staging.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation
