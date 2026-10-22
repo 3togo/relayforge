@@ -4,18 +4,18 @@ The native create_ap payload now uses Rust for snapshots and child recovery as
 well as supervision. It contains no Python backend or recovery helper. The
 existing GTK, GNOME Shell and tray controls keep the same D-Bus contract; the
 optional original compatibility service and its pinned Python files are retained
-in source. Bash still performs the actual hostapd/dnsmasq, interface and firewall
-transactions. No networking engine or desktop component was installed or activated
+in source. Bash still performs hostapd/dnsmasq, interface and forwarding-sysctl
+transactions; [Rust now owns firewall rule transactions](native-firewall.md). No networking engine or desktop component was installed or activated
 for this migration.
 
 ## Bash boundary and provenance
 
 `tools/stage-native.py --backend create_ap` generates `native/create_ap` from the
 pinned vendor script. The transformation changes the helper location and exactly
-six Python recovery calls into calls to the staged Rust executable's internal
+six Python recovery calls, plus the direct Bash firewall commands, into calls to
+the staged Rust executable's internal
 `--create-ap-runtime` entry point. It verifies the source hash against the vendor manifest and refuses an
-unexpected protocol shape or any remaining Python recovery reference. All Bash networking logic and original
-notices remain. The 48-file vendor snapshot stays byte-for-byte unchanged.
+unexpected protocol shape or any remaining Python recovery reference. The remaining Bash networking logic and original notices remain. The 48-file vendor snapshot stays byte-for-byte unchanged.
 
 The resulting seven-file payload includes the Rust service, generated Bash
 adapter, systemd unit, bus activation, original bus/Polkit policies and license.
@@ -24,7 +24,8 @@ Python remains a build/test dependency for staging, reference parity and desktop
 integration tests; it is not used by native backend recovery.
 
 The Rust actions are `save`, `load`, `record-child`, `stop-children`,
-`check-interfaces` and `verify-cleanup`. They run before D-Bus registration.
+`check-interfaces` and `verify-cleanup`, plus `firewall-add`, `firewall-remove` and
+`firewall-check`. They run before D-Bus registration.
 Production actions require root and accept only instance/common directories in
 the fixed private engine runtime. There is no generic subprocess executor or
 unrestricted recovery-directory override. The supervisor still selects exact

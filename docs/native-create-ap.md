@@ -9,7 +9,7 @@ Python D-Bus/GLib worker is never constructed in this mode.
 Rust also implements snapshots and child recovery through the
 [native recovery runtime](native-recovery.md). A generated adapter of the pinned
 Bash script configures hostapd, dnsmasq, interfaces and firewall rules while
-calling Rust for all six recovery operations. Neither native service mode
+calling Rust for recovery and [firewall rule transactions](native-firewall.md). Neither native service mode
 requires a Python backend; the original compatibility mode remains available.
 
 ## Startup and ownership

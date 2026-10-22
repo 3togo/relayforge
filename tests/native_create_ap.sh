@@ -8,6 +8,7 @@ cleanup_owned() {
     [[ ! -e "$root/fail-cleanup" ]] || return 1
     runtime stop-children "$CONFDIR" || return 1
     runtime check-interfaces "$CONFDIR" || return 1
+    runtime firewall-remove "$CONFDIR" || return 1
     rm -rf -- "$root/net/$VWIFI_IFACE"
     runtime verify-cleanup "$CONFDIR" || return 1
     rm -rf -- "$CONFDIR"
@@ -43,14 +44,16 @@ mkdir -m 755 "$CONFDIR"
 printf '%s\n' "$$" > "$CONFDIR/pid"
 chmod 444 "$CONFDIR/pid"
 INTERNET_IFACE=$WIFI_IFACE VWIFI_IFACE=apfake0 BRIDGE_IFACE= OLD_MACADDR= NEW_MACADDR=02:77:88:99:aa:bb
-NO_VIRT=0 SHARE_METHOD=nat NO_DNS=0 DNS_PORT= GATEWAY=192.168.12.1 RUNNING_AS_DAEMON=1
+NO_VIRT=0 SHARE_METHOD=nat NO_DNS=0 DNS_PORT=5353 GATEWAY=192.168.12.1 RUNNING_AS_DAEMON=1
 ADDED_UNMANAGED= RULE_COMMENT="wifi-relay-${CONFDIR##*/}" BRIDGE_CREATED=0 PHYSICAL_CONFIGURED=0
 mkdir -p "$root/net/apfake0"
 printf '101\n' > "$root/net/apfake0/ifindex"
 printf '%s\n' "$NEW_MACADDR" > "$root/net/apfake0/address"
+WIFI_IFACE=$VWIFI_IFACE
 args=()
 for name in CONFDIR COMMON_CONFDIR WIFI_IFACE VWIFI_IFACE INTERNET_IFACE BRIDGE_IFACE OLD_MACADDR NEW_MACADDR NO_VIRT SHARE_METHOD NO_DNS DNS_PORT GATEWAY RUNNING_AS_DAEMON DAEMON_PIDFILE ADDED_UNMANAGED RULE_COMMENT BRIDGE_CREATED PHYSICAL_CONFIGURED; do args+=("$name=${!name}"); done
 runtime save "$CONFDIR" "$$" "${args[@]}"
+for phase in nat dns dhcp; do runtime firewall-add "$CONFDIR" "$phase"; done
 printf 'fixture\n' > "$CONFDIR/hostapd.conf"
 "$root/bin/hostapd" "$CONFDIR/hostapd.conf" &
 printf '%s\n' "$!" > "$CONFDIR/hostapd.pid"

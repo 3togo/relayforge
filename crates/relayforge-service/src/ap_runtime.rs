@@ -1,5 +1,6 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
 use crate::{
+    ap_firewall::{Executor, Plan, Simulator},
     ap_process::{Birth, Handle},
     config_store::random_secret,
     nm_journal::Result,
@@ -284,6 +285,140 @@ impl Directory {
         Ok(names)
     }
 }
+struct FirewallLock(File);
+impl Drop for FirewallLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+impl Directory {
+    async fn firewall_lock(&self) -> Result<FirewallLock> {
+        let fd = unsafe {
+            libc::openat(
+                self.fd.as_raw_fd(),
+                c".firewall.lock".as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err("Cannot open firewall transaction lock");
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let m = file
+            .metadata()
+            .map_err(|_| "Cannot inspect firewall transaction lock")?;
+        if !m.is_file()
+            || m.uid() != unsafe { libc::geteuid() }
+            || m.nlink() != 1
+            || m.mode() & 0o7777 != 0o600
+        {
+            return Err("Unsafe firewall transaction lock");
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(FirewallLock(file));
+            }
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            if errno != Some(libc::EWOULDBLOCK) {
+                return Err("Cannot lock firewall transaction");
+            }
+            if Instant::now() >= deadline {
+                return Err("Firewall transaction still running; cleanup is unconfirmed");
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+struct Firewall<'a> {
+    platform: &'a Platform,
+    data: &'a Snapshot,
+}
+impl Firewall<'_> {
+    fn permit_add(&self) -> Result<()> {
+        if self.data.owner.current()?.is_none() {
+            return Err("Firewall owner exited; refusing insertion");
+        }
+        let f = &self.data.fields;
+        let iface = &f["WIFI_IFACE"];
+        if (f["NO_VIRT"] == "0" && (f["VWIFI_IFACE"].is_empty() || f["VWIFI_IFACE"] != *iface))
+            || (f["NO_VIRT"] == "1" && f["PHYSICAL_CONFIGURED"] != "1")
+            || !self.data.interfaces.contains_key(iface)
+            || self.platform.interface(iface)?.is_none()
+        {
+            return Err("Firewall AP identity is not realized and recorded");
+        }
+        Ok(())
+    }
+}
+impl Executor for Firewall<'_> {
+    async fn execute(&mut self, args: &[String]) -> Result<radio::Reply> {
+        let operation = args.get(4).map(String::as_str);
+        if matches!(operation, Some("-I" | "-D")) {
+            self.data.interfaces(self.platform)?;
+        }
+        if operation == Some("-I") {
+            self.permit_add()?;
+        }
+        if let Some(root) = &self.platform.fixture {
+            let dir = Directory::open(root)?;
+            let previous = dir.read("firewall-state.json", true, LIMIT)?;
+            if let Some(bytes) = previous {
+                let mut state: Simulator = serde_json::from_slice(&bytes)
+                    .map_err(|_| "Invalid simulated firewall state")?;
+                let reply = state.execute(args)?;
+                dir.write("firewall-state.json", &state, Some(&bytes))?;
+                return Ok(reply);
+            }
+            // Older recovery fixtures supply read-only listings, never a system tool.
+            if operation != Some("-S") {
+                return Err("Missing mutable simulated firewall state");
+            }
+            let bytes = dir
+                .read("firewall.json", true, LIMIT)?
+                .ok_or("Missing simulated firewall")?;
+            let map: BTreeMap<String, String> =
+                serde_json::from_slice(&bytes).map_err(|_| "Invalid simulated firewall")?;
+            let table = args.get(3).ok_or("Missing simulated firewall table")?;
+            return Ok(radio::Reply {
+                code: Some(0),
+                stdout: map
+                    .get(table)
+                    .ok_or("Missing simulated firewall table")?
+                    .clone(),
+            });
+        }
+        let program = [
+            "/usr/sbin/iptables",
+            "/usr/bin/iptables",
+            "/sbin/iptables",
+            "/bin/iptables",
+        ]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+        .ok_or("iptables unavailable")?;
+        let environment = BTreeMap::from([
+            ("PATH".into(), "/usr/sbin:/usr/bin:/sbin:/bin".into()),
+            ("LC_ALL".into(), "C".into()),
+        ]);
+        radio::command_result(
+            program,
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            Duration::from_secs(4),
+            Some(&environment),
+        )
+        .await
+        .map_err(|_| "Firewall command failed or timed out")
+    }
+}
 fn filename(value: &str) -> Result<CString> {
     if value.is_empty() || value == "." || value == ".." || value.contains('/') {
         return Err("Invalid recovery filename");
@@ -440,7 +575,7 @@ impl Snapshot {
                     }
                 }
                 "DNS_PORT" => {
-                    if !v.is_empty() && v.parse::<u16>().ok().filter(|n| *n > 0).is_none() {
+                    if !v.is_empty() && v.parse::<u16>().is_err() {
                         return Err("Invalid recovery DNS port");
                     }
                 }
@@ -770,6 +905,50 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             snapshot(p, &dir)?.0.interfaces(p)?;
             Ok(String::new())
         }
+        "firewall-add" if values.len() == 1 => {
+            let _lock = dir.firewall_lock().await?;
+            let (data, _) = snapshot(p, &dir)?;
+            data.interfaces(p)?;
+            Firewall {
+                platform: p,
+                data: &data,
+            }
+            .permit_add()?;
+            let plan = Plan::new(&data.fields)?;
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                plan.apply(
+                    &values[0],
+                    &mut Firewall {
+                        platform: p,
+                        data: &data,
+                    },
+                ),
+            )
+            .await
+            .map_err(|_| "Firewall application deadline exceeded; cleanup required")??;
+            Ok(String::new())
+        }
+        "firewall-remove" | "firewall-check" if values.is_empty() => {
+            let _lock = dir.firewall_lock().await?;
+            let (data, _) = snapshot(p, &dir)?;
+            data.interfaces(p)?;
+            let plan = Plan::new(&data.fields)?;
+            let mut driver = Firewall {
+                platform: p,
+                data: &data,
+            };
+            tokio::time::timeout(Duration::from_secs(12), async {
+                if action == "firewall-remove" {
+                    plan.remove(&mut driver).await
+                } else {
+                    plan.verify(&mut driver).await
+                }
+            })
+            .await
+            .map_err(|_| "Firewall cleanup deadline exceeded; snapshot retained")??;
+            Ok(String::new())
+        }
         "verify-cleanup" if values.is_empty() => {
             let (data, _) = snapshot(p, &dir)?;
             for name in dir.entries()? {
@@ -801,34 +980,13 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                     return Err("Owned interface survived cleanup");
                 }
             }
-            for table in ["filter", "nat"] {
-                let rules = if let Some(root) = &p.fixture {
-                    let bytes = Directory::open(root)?
-                        .read("firewall.json", true, LIMIT)?
-                        .ok_or("Missing simulated firewall")?;
-                    let map: BTreeMap<String, String> =
-                        serde_json::from_slice(&bytes).map_err(|_| "Invalid simulated firewall")?;
-                    map.get(table)
-                        .ok_or("Missing simulated firewall table")?
-                        .clone()
-                } else {
-                    let program = [
-                        "/usr/sbin/iptables",
-                        "/usr/bin/iptables",
-                        "/sbin/iptables",
-                        "/bin/iptables",
-                    ]
-                    .into_iter()
-                    .map(Path::new)
-                    .find(|p| p.is_file())
-                    .ok_or("iptables unavailable")?;
-                    radio::command(program, &["-w", "-t", table, "-S"], Duration::from_secs(5))
-                        .await?
-                };
-                if rules.contains(&data.fields["RULE_COMMENT"]) {
-                    return Err("Owned firewall rules survived cleanup");
-                }
-            }
+            let _lock = dir.firewall_lock().await?;
+            Plan::new(&data.fields)?
+                .verify(&mut Firewall {
+                    platform: p,
+                    data: &data,
+                })
+                .await?;
             Ok(String::new())
         }
         _ => Err("Invalid create_ap runtime action or arguments"),

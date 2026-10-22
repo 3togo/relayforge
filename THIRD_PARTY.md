@@ -22,5 +22,6 @@ reference validator's printable-character semantics without a Python runtime
 dependency in the Rust schema.
 
 The native create_ap payload derives its Bash adapter from the pinned BSD-2-Clause
-script. Staging changes only the recovery-helper location and six invocations to
-use the Rust runtime; the original source and notices remain in the vendor tree.
+script. Staging changes the recovery-helper location and delegates recovery and firewall
+operations to Rust. The original source and notices remain in the vendor tree;
+all transformations are checked against the pinned source hash and layout.

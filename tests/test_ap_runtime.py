@@ -334,6 +334,7 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
         (state/'net/demo0/ifindex').write_text('7\n')
         (state/'net/demo0/address').write_text('02:00:00:00:00:07\n')
         private(state/'firewall.json',dict(filter='',nat=''))
+        private(state/'firewall-state.json',dict(rules=[dict(table='filter',chain='INPUT',args=['--comment','foreign-preserved','-j','ACCEPT'])]))
 
     @staticmethod
     def service(context):
@@ -386,3 +387,23 @@ class NativeRuntimeLifecycleTests(unittest.TestCase):
                 self.assertFalse((context.state/'create-ap.json').exists())
                 self.assertFalse(reference.same_process(identity))
                 self.assertFalse(list((context.state/'engine').glob('create_ap.demo0.conf.*')))
+                self.assertEqual(len(json.loads((context.state/'firewall-state.json').read_text())['rules']),1)
+
+    def test_firewall_failure_retains_journal_and_desktop_stop_can_retry(self):
+        from test_create_ap import bench as supervised_bench
+        from test_dbus import call,decode_reply
+        with supervised_bench() as context:
+            self.prepare(context)
+            with self.service(context) as (bus,_):
+                self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
+                path=context.state/'firewall-state.json'
+                data=json.loads(path.read_text())
+                self.assertEqual(len(data['rules']),9)
+                data['fail_delete']=True
+                private(path,data)
+                self.assertFalse(decode_reply('Stop',call(bus,'Stop')))
+                self.assertTrue((context.state/'create-ap.json').exists())
+                data=json.loads(path.read_text());data['fail_delete']=False;private(path,data)
+                self.assertTrue(decode_reply('Stop',call(bus,'Stop')))
+                self.assertFalse((context.state/'create-ap.json').exists())
+                self.assertEqual(len(json.loads(path.read_text())['rules']),1)

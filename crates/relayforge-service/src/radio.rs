@@ -1,4 +1,4 @@
-//! Bounded, read-only iw inspection. Dropping an inspection kills its process group.
+//! Bounded utility execution and read-only iw inspection. Cancellation kills owned command groups.
 use relayforge_core::radio::{device, Capture, Snapshot, MAX_CAPTURE};
 use std::os::unix::process::CommandExt;
 use std::{path::Path, process::Stdio, time::Duration};
@@ -49,6 +49,22 @@ pub(crate) async fn command_env(
     deadline: Duration,
     environment: Option<&std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>>,
 ) -> Result<String, &'static str> {
+    let reply = command_result(program, args, deadline, environment).await?;
+    if reply.code != Some(0) {
+        return Err("Radio inspection command failed");
+    }
+    Ok(reply.stdout)
+}
+pub(crate) struct Reply {
+    pub code: Option<i32>,
+    pub stdout: String,
+}
+pub(crate) async fn command_result(
+    program: &Path,
+    args: &[&str],
+    deadline: Duration,
+    environment: Option<&std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>>,
+) -> Result<Reply, &'static str> {
     let mut command = Command::new(program);
     if let Some(environment) = environment {
         command.env_clear().envs(environment);
@@ -81,10 +97,11 @@ pub(crate) async fn command_env(
             .await
             .map_err(|_| "Cannot wait for radio inspection")?;
         job.armed = false;
-        if !status.success() {
-            return Err("Radio inspection command failed");
-        }
-        String::from_utf8(stdout).map_err(|_| "Radio inspection output is not UTF-8")
+        Ok(Reply {
+            code: status.code(),
+            stdout: String::from_utf8(stdout)
+                .map_err(|_| "Radio inspection output is not UTF-8")?,
+        })
     };
     timeout(deadline, operation)
         .await
@@ -146,6 +163,22 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn structured_command_results_preserve_exit_codes_and_discard_diagnostics() {
+        let reply = command_result(
+            Path::new("/bin/sh"),
+            &[
+                "-c",
+                "printf 'literal output'; printf 'secret diagnostic' >&2; exit 3",
+            ],
+            Duration::from_secs(2),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.code, Some(3));
+        assert_eq!(reply.stdout, "literal output");
+    }
     #[tokio::test]
     async fn captures_output_and_sanitizes_failed_diagnostics() {
         assert_eq!(

@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -29,6 +30,49 @@ def native_engine(source):
     text=text.replace(call,'"$RUNTIME_HELPER" --create-ap-runtime')
     if 'python3' in text or 'LEGACY_HELPER' in text:
         raise ValueError('Native create_ap adapter still references Python recovery')
+    lines=text.splitlines(keepends=True)
+    result=[]
+    counts={'nat':0,'dns':0,'dhcp':0,'delete':0}
+    index=0
+    while index<len(lines):
+        line=lines[index]
+        match=re.match(r'^(\s*)iptables ',line)
+        if not match:
+            result.append(line)
+            index+=1
+            continue
+        command=line
+        while command.rstrip().endswith(chr(92)):
+            index+=1
+            command+=lines[index]
+        indent=match.group(1)
+        if ' -D ' in command:
+            counts['delete']+=1
+            result.append(indent+': # Exact owned rules are removed by Rust above.\n')
+        else:
+            if 'POSTROUTING' in command or 'FORWARD' in command:
+                phase='nat'
+            elif '--dport 67' in command:
+                phase='dhcp'
+            else:
+                phase='dns'
+            counts[phase]+=1
+            if counts[phase]==1:
+                if phase=='dhcp':
+                    result.append(indent+'save_recovery_state || die "Could not record DHCP resources."\n')
+                result.append(indent+'"$RUNTIME_HELPER" --create-ap-runtime firewall-add "$CONFDIR" '+phase+' || die\n')
+            else:
+                result.append(indent+': # Rust applies this complete firewall phase.\n')
+        index+=1
+    if counts!={'nat':3,'dns':4,'dhcp':1,'delete':8}:
+        raise ValueError('Pinned firewall command layout changed; review native extraction')
+    text=''.join(result)
+    anchor='    local found=0\n    for x in $(list_running_conf); do\n'
+    if text.count(anchor)!=1:
+        raise ValueError('Pinned firewall cleanup boundary changed')
+    text=text.replace(anchor,'    "$RUNTIME_HELPER" --create-ap-runtime firewall-remove "$CONFDIR" || failed=1\n\n'+anchor)
+    if re.search(r'^\s*iptables ',text,re.MULTILINE):
+        raise ValueError('Native adapter still executes Bash firewall commands')
     return text.encode('utf-8')
 
 
