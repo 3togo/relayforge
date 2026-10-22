@@ -2,7 +2,7 @@
 Description=RelayForge native NetworkManager Wi-Fi sharing
 Requires=NetworkManager.service
 After=NetworkManager.service dbus.service
-Conflicts=wifi-hotspot-daemon.service relayforge.service
+Conflicts=wifi-hotspot-daemon.service relayforge.service relayforge-create-ap.service
 
 [Service]
 Type=dbus

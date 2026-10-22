@@ -14,6 +14,7 @@ unchanged GTK / GNOME Shell / tray controls
         |-- native sysfs inventory
         |-- native radio parsing / startup preflight
         |-- opt-in native NetworkManager controller / ownership journal
+        |-- opt-in Rust create_ap supervisor / gated Bash helper / recovery journal
         `-- anonymous stdin/stdout JSON pipes
                          |
               pinned Python backend adapter
@@ -86,9 +87,11 @@ journals, recovery and automatic resume policy.
    profiles and client-bound activation. Both NM-owned child interfaces and
    Rust-controlled iw helpers are covered by simulated fault tests. These tests
    do not prove driver or NM extension compatibility on a physical machine.
-5. Next: move create_ap supervision into Rust while retaining the current
-   compatibility path until feature parity is demonstrated. Replacing shell
-   network management itself is a separate project decision.
+5. Completed as an opt-in mode: Rust create_ap process supervision, readiness,
+   client reports, cancellation and owned recovery. The pinned Bash networking
+   engine and its internal Python snapshot/recovery helper remain. See
+   [create_ap supervision](native-create-ap.md). Compatibility mode remains until
+   feature parity is demonstrated; replacing shell networking is a separate step.
 6. A native service, bus activation and policy payload can now be staged for
    review. Distribution packages, deployed upgrade/rollback validation and
    additional service hardening remain pending. Physical DHCP, DNS, verified

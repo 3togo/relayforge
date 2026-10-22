@@ -9,13 +9,17 @@ authorization, configuration and credential storage, interface/radio inspection,
 lifecycle intent and status snapshots. The opt-in
 [native NetworkManager mode](docs/native-networkmanager.md) also controls
 activation, clients, cancellation, ownership recovery and cleanup without a
-Python worker. The compatibility mode retains the pinned Python/create_ap engine.
-Neither mode is yet a validated production replacement.
+Python worker. The opt-in [Rust create_ap supervisor](docs/native-create-ap.md)
+owns helper processes, readiness, clients and recovery without the Python
+supervisor; its pinned Bash engine and internal Python recovery helper remain.
+The compatibility mode retains the original Python engine. These native modes
+are not yet validated production replacements.
 
 ## Build and check
 
 Build/tests require Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
-The native runtime uses NetworkManager, iw and ip, and does not require Python.
+The native NetworkManager runtime uses NetworkManager, iw and ip without Python.
+Native create_ap supervision retains Bash, Python and create_ap networking dependencies.
 Dependency versions are pinned in Cargo.lock. The checked build environment and
 results are recorded in [the initial validation](docs/validation.md) and
 [native configuration migration](docs/native-configuration.md).
@@ -110,6 +114,10 @@ wire contract and declines band switching to preserve upstream. See the
 [native mode and staging guide](docs/native-networkmanager.md) and
 [validation report](docs/native-networkmanager-validation.md). No native service
 has been installed or enabled by this migration.
+
+The alternative `--native-create-ap --legacy-root /usr/lib/relayforge` mode requires
+`BACKEND=create_ap`. See [Rust create_ap supervision](docs/native-create-ap.md) for
+its ownership rules, compatibility limits and `--backend create_ap` staging option.
 
 No installer or package release is supplied. Staging creates a reviewable payload;
 it does not replace services or change system activation. Native hotspot activation

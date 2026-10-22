@@ -41,7 +41,18 @@ pub(crate) async fn command(
     args: &[&str],
     deadline: Duration,
 ) -> Result<String, &'static str> {
+    command_env(program, args, deadline, None).await
+}
+pub(crate) async fn command_env(
+    program: &Path,
+    args: &[&str],
+    deadline: Duration,
+    environment: Option<&std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>>,
+) -> Result<String, &'static str> {
     let mut command = Command::new(program);
+    if let Some(environment) = environment {
+        command.env_clear().envs(environment);
+    }
     command
         .args(args)
         .env("LC_ALL", "C")

@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=io.github.erhanzeyrek.WifiHotspot
+Exec=/usr/lib/relayforge/relayforge-service --native-create-ap --legacy-root /usr/lib/relayforge
+User=root
+SystemdService=relayforge-create-ap.service

@@ -1,6 +1,6 @@
 //! Credential-free write-ahead ownership journal, locked for the service lifetime.
 use crate::config_store::random_secret;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     ffi::CString,
     fs::{File, OpenOptions},
@@ -88,14 +88,28 @@ impl Owned {
         Ok(())
     }
 }
-pub struct Journal {
+pub trait Record: Serialize + DeserializeOwned {
+    fn validate_record(&self) -> Result<()>;
+}
+impl Record for Owned {
+    fn validate_record(&self) -> Result<()> {
+        self.validate()
+    }
+}
+
+pub struct Journal<T: Record = Owned> {
+    name: CString,
+    record: std::marker::PhantomData<T>,
     directory: File,
     _lock: File,
     uid: u32,
     expected: Option<Vec<u8>>,
 }
-impl Journal {
+impl<T: Record> Journal<T> {
     pub fn open(path: &Path, uid: u32) -> Result<Self> {
+        Self::open_named(path, uid, c"networkmanager.json")
+    }
+    pub fn open_named(path: &Path, uid: u32, name: &std::ffi::CStr) -> Result<Self> {
         let directory = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -108,6 +122,8 @@ impl Journal {
             return Err("Ownership directory must be private and owned by service user");
         }
         let mut journal = Self {
+            name: name.to_owned(),
+            record: std::marker::PhantomData,
             directory,
             _lock: File::open("/dev/null").map_err(|_| "Cannot initialize ownership lock")?,
             uid,
@@ -119,11 +135,21 @@ impl Journal {
             return Err("Native ownership directory is already locked");
         }
         journal._lock = lock;
+        // A stopped service may still own resources. A different mode must not
+        // bypass its pending recovery merely by using a different journal name.
+        let other = if name == c"create-ap.json" {
+            c"networkmanager.json"
+        } else {
+            c"create-ap.json"
+        };
+        if journal.read_private(other, 65536)?.is_some() {
+            return Err("Clean up the previous native backend before switching service modes");
+        }
         journal.expected = journal.bytes()?;
         if let Some(bytes) = &journal.expected {
-            let record: Owned =
+            let record: T =
                 serde_json::from_slice(bytes).map_err(|_| "Invalid native ownership journal")?;
-            record.validate()?;
+            record.validate_record()?;
         }
         Ok(journal)
     }
@@ -158,7 +184,7 @@ impl Journal {
         let fd = unsafe {
             libc::openat(
                 self.directory.as_raw_fd(),
-                c"networkmanager.json".as_ptr(),
+                self.name.as_ptr(),
                 libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
             )
         };
@@ -190,7 +216,7 @@ impl Journal {
         }
         Ok(Some(bytes))
     }
-    pub fn load(&self) -> Result<Option<Owned>> {
+    pub fn load(&self) -> Result<Option<T>> {
         if self.bytes()? != self.expected {
             return Err("Native ownership journal changed externally");
         }
@@ -201,8 +227,8 @@ impl Journal {
             })
             .transpose()
     }
-    pub fn write(&mut self, owned: &Owned) -> Result<()> {
-        owned.validate()?;
+    pub fn write(&mut self, owned: &T) -> Result<()> {
+        owned.validate_record()?;
         if self.bytes()? != self.expected {
             return Err("Native ownership journal changed externally");
         }
@@ -223,7 +249,7 @@ impl Journal {
                     self.directory.as_raw_fd(),
                     name.as_ptr(),
                     self.directory.as_raw_fd(),
-                    c"networkmanager.json".as_ptr(),
+                    self.name.as_ptr(),
                 )
             } != 0
             {
@@ -239,19 +265,74 @@ impl Journal {
         }
         result
     }
+    pub fn create_private(&self, name: &std::ffi::CStr, bytes: &[u8]) -> Result<()> {
+        let mut file = self.open_file(name, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+        let result = file
+            .write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| self.directory.sync_all())
+            .map_err(|_| "Cannot persist private runtime file");
+        if result.is_err() {
+            unsafe {
+                libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0);
+            }
+        }
+        result
+    }
+    pub fn read_private(&self, name: &std::ffi::CStr, limit: usize) -> Result<Option<Vec<u8>>> {
+        // SAFETY: filename and retained directory descriptor are valid.
+        let fd = unsafe {
+            libc::openat(
+                self.directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                Ok(None)
+            } else {
+                Err("Cannot read private runtime file")
+            };
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let meta = file
+            .metadata()
+            .map_err(|_| "Cannot inspect private runtime file")?;
+        if !meta.is_file()
+            || meta.uid() != self.uid
+            || meta.nlink() != 1
+            || meta.mode() & 0o7777 != 0o600
+            || meta.len() > limit as u64
+        {
+            return Err("Unsafe private runtime file");
+        }
+        let mut bytes = Vec::new();
+        file.take(limit as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read private runtime file")?;
+        if bytes.len() > limit {
+            return Err("Oversized private runtime file");
+        }
+        Ok(Some(bytes))
+    }
+    pub fn remove_private(&self, name: &std::ffi::CStr) -> Result<()> {
+        if self.read_private(name, 65536)?.is_some() {
+            if unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                return Err("Cannot remove private runtime file");
+            }
+            self.directory
+                .sync_all()
+                .map_err(|_| "Cannot sync private runtime directory")?;
+        }
+        Ok(())
+    }
     pub fn clear(&mut self) -> Result<()> {
         if self.bytes()? != self.expected {
             return Err("Native ownership journal changed externally");
         }
         if self.expected.is_some() {
-            if unsafe {
-                libc::unlinkat(
-                    self.directory.as_raw_fd(),
-                    c"networkmanager.json".as_ptr(),
-                    0,
-                )
-            } != 0
-            {
+            if unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) } != 0 {
                 return Err("Cannot remove native ownership journal");
             }
             self.expected = None;
@@ -273,8 +354,8 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         let uid = unsafe { libc::geteuid() };
-        let mut journal = Journal::open(&path, uid).unwrap();
-        assert!(Journal::open(&path, uid).is_err());
+        let mut journal = Journal::<Owned>::open(&path, uid).unwrap();
+        assert!(Journal::<Owned>::open(&path, uid).is_err());
         let record = Owned::new("wlan0", 0, true).unwrap();
         journal.write(&record).unwrap();
         assert_eq!(journal.load().unwrap(), Some(record.clone()));
@@ -282,10 +363,46 @@ mod tests {
         assert!(journal.clear().is_err());
         assert!(journal.write(&record).is_err());
         drop(journal);
-        assert!(Journal::open(&path, uid).is_err());
+        assert!(Journal::<Owned>::open(&path, uid).is_err());
         std::fs::remove_file(path.join("networkmanager.json")).unwrap();
         symlink("/dev/null", path.join("networkmanager.json")).unwrap();
-        assert!(Journal::open(&path, uid).is_err());
+        assert!(Journal::<Owned>::open(&path, uid).is_err());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn private_snapshots_and_pending_backend_journals_fail_closed() {
+        let path =
+            std::env::temp_dir().join(format!("relayforge-journal-{}", random_secret().unwrap()));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let journal = Journal::<Owned>::open(&path, uid).unwrap();
+        journal.create_private(c"snapshot", b"private").unwrap();
+        assert!(journal.create_private(c"snapshot", b"replace").is_err());
+        assert_eq!(
+            journal.read_private(c"snapshot", 32).unwrap().unwrap(),
+            b"private"
+        );
+        assert!(journal.read_private(c"snapshot", 2).is_err());
+        std::fs::hard_link(path.join("snapshot"), path.join("linked")).unwrap();
+        assert!(journal.remove_private(c"snapshot").is_err());
+        std::fs::remove_file(path.join("linked")).unwrap();
+        journal.remove_private(c"snapshot").unwrap();
+        symlink("/dev/null", path.join("snapshot")).unwrap();
+        assert!(journal.read_private(c"snapshot", 32).is_err());
+        assert!(journal.remove_private(c"snapshot").is_err());
+        journal
+            .create_private(c"create-ap.json", b"pending")
+            .unwrap();
+        drop(journal);
+        assert!(Journal::<Owned>::open(&path, uid).is_err());
+        std::fs::remove_file(path.join("create-ap.json")).unwrap();
+        let mut journal = Journal::<Owned>::open(&path, uid).unwrap();
+        journal
+            .write(&Owned::new("wlan0", 0, true).unwrap())
+            .unwrap();
+        drop(journal);
+        assert!(Journal::<Owned>::open_named(&path, uid, c"create-ap.json").is_err());
         std::fs::remove_dir_all(path).unwrap();
     }
 }

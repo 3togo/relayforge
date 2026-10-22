@@ -1,6 +1,9 @@
+mod ap_process;
 mod backend;
 mod config_store;
+mod create_ap;
 mod inventory;
+mod native_backend;
 mod networkmanager;
 mod nm_journal;
 mod radio;
@@ -25,7 +28,7 @@ struct Service {
     core: Arc<Mutex<Lifecycle>>,
     clients: Arc<Mutex<Value>>,
     worker: Option<Arc<Worker>>,
-    native: Option<Arc<networkmanager::Backend>>,
+    native: Option<Arc<native_backend::Backend>>,
     configuration: Arc<Mutex<config_store::Store>>,
     operations: tokio::sync::Mutex<()>,
     config_users: tokio::sync::RwLock<()>,
@@ -322,8 +325,10 @@ impl Service {
         let current = self.load_config().await?;
         let merged = config::merge(&current, &patch)
             .map_err(|error| fdo::Error::InvalidArgs(error.into()))?;
-        if self.native.is_some() && merged["BACKEND"] != "networkmanager" {
-            return Err(fdo::Error::InvalidArgs("This native service mode requires BACKEND=networkmanager; use compatibility service mode for create_ap".into()));
+        if let Some(native) = &self.native {
+            if merged["BACKEND"] != native.name() {
+                return Err(fdo::Error::InvalidArgs(format!("This native service mode requires BACKEND={}; switch service modes after confirmed cleanup", native.name())));
+            }
         }
         let switching = current["BACKEND"] != merged["BACKEND"];
         if switching {
@@ -566,6 +571,9 @@ fn verify_tree(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--create-ap-exec") {
+        return create_ap::exec_gate(&args);
+    }
     // Diagnostic modes return before bus registration or worker construction.
     // They run read-only iw inspection and never apply a startup plan.
     if let [mode, target] = args.as_slice() {
@@ -630,6 +638,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let (demo,deny,use_polkit,root,config_path)=match args.as_slice() {
+        [mode,flag,path] if mode=="--native-create-ap" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
+        [mode,_capture,path,_state,_helper] if mode=="--test-create-ap" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode] if mode=="--native-networkmanager" => (false,false,true,None,Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
         [mode,_capture,path,_state] if mode=="--test-networkmanager" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode] if mode=="--demo" => (true,false,false,None,None),
@@ -638,13 +648,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
         [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
-        _=>return Err("Usage: relayforge-service --native-networkmanager | --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] [--backend create_ap|networkmanager] | --system --legacy-root /root-owned/installation".into()),
+        _=>return Err("Usage: relayforge-service --native-networkmanager | --native-create-ap --legacy-root ROOT | --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] [--backend create_ap|networkmanager] | --system --legacy-root /root-owned/installation".into()),
     };
     let native_mode = matches!(
         args.first().map(String::as_str),
-        Some("--native-networkmanager" | "--test-networkmanager")
+        Some(
+            "--native-networkmanager"
+                | "--test-networkmanager"
+                | "--native-create-ap"
+                | "--test-create-ap"
+        )
     );
-    let fixture = args.first().map(String::as_str) == Some("--test-networkmanager");
+    let create_ap_mode = matches!(
+        args.first().map(String::as_str),
+        Some("--native-create-ap" | "--test-create-ap")
+    );
+    let fixture = matches!(
+        args.first().map(String::as_str),
+        Some("--test-networkmanager" | "--test-create-ap")
+    );
+    if fixture && unsafe { libc::geteuid() } == 0 {
+        return Err("Network fixtures must run as an ordinary user".into());
+    }
     let radio = if args.first().map(String::as_str) == Some("--demo-radio") || fixture {
         use std::io::Read;
         let mut bytes = Vec::new();
@@ -702,8 +727,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_store::Store::Memory(config)
     };
     let native = if native_mode {
-        if configuration.load()?["BACKEND"] != "networkmanager" {
-            return Err("Native service requires BACKEND=networkmanager".into());
+        let expected = if create_ap_mode {
+            "create_ap"
+        } else {
+            "networkmanager"
+        };
+        if configuration.load()?["BACKEND"] != expected {
+            return Err(format!("Native service requires BACKEND={expected}").into());
         }
         let path = if fixture {
             PathBuf::from(&args[3])
@@ -714,11 +744,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new().mode(0o700).create(&path)?;
         }
-        // SAFETY: geteuid has no preconditions.
-        Some(networkmanager::Backend::new(
-            networkmanager::Platform { fixture },
-            nm_journal::Journal::open(&path, unsafe { libc::geteuid() })?,
-        ))
+        let backend = if create_ap_mode {
+            let helper = if fixture {
+                PathBuf::from(&args[4])
+            } else {
+                root.as_ref()
+                    .unwrap()
+                    .join("vendor/wifi-relay/daemon/create_ap")
+            };
+            native_backend::Backend::CreateAp(create_ap::Backend::new(
+                create_ap::Platform {
+                    fixture,
+                    runtime: path,
+                },
+                &helper,
+            )?)
+        } else {
+            native_backend::Backend::NetworkManager(networkmanager::Backend::new(
+                networkmanager::Platform { fixture },
+                nm_journal::Journal::open(&path, unsafe { libc::geteuid() })?,
+            ))
+        };
+        Some(Arc::new(backend))
     } else {
         None
     };
@@ -740,7 +787,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let core = Arc::new(Mutex::new(Lifecycle::default()));
     let clients = Arc::new(Mutex::new(json!([])));
     let (events, mut receiver) = mpsc::channel::<backend::Event>(64);
-    let worker = if let Some(root) = root {
+    let worker = if native_mode {
+        None
+    } else if let Some(root) = root {
         Some(Worker::spawn(&root, events).await?)
     } else {
         None
@@ -873,7 +922,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if demo {
             "demo: no networking"
         } else if native_mode {
-            "native NetworkManager backend"
+            "native sharing backend"
         } else {
             "compatibility backend"
         }

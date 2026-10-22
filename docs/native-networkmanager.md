@@ -3,7 +3,8 @@
 `relayforge-service --native-networkmanager` provides a Rust-controlled
 NetworkManager sharing path through the existing desktop D-Bus service. It never
 constructs the Python worker and does not invoke nmcli. The existing compatibility
-mode remains available for create_ap and the pinned Python engine. Native mode is
+mode remains available for the pinned Python engine. The separate
+[Rust create_ap supervisor](native-create-ap.md) is also opt-in. Native mode is
 opt-in; no installed service or network is changed by building or staging it.
 
 ## Activation and ownership
@@ -69,7 +70,7 @@ against this backend, including status/client signals.
 Native mode requires `BACKEND=networkmanager`. Other configuration fields use
 the existing native schema and the reference NetworkManager option restrictions.
 Selecting create_ap in this mode returns an explicit InvalidArgs response; use
-the compatibility service mode for that backend. There is no live migration
+the Rust create_ap or compatibility service mode for that backend. There is no live migration
 between service implementations. Band-switch requests return `success: false`
 without changing the current sharing state or upstream. PrepareFirewall returns
 true because NM performs its shared-connection firewall work during activation;
