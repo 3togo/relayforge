@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
                      'Debian packaging tools are required')
 class DebPackagingTests(unittest.TestCase):
     def test_tray_launchers_dependencies_and_login_configuration(self):
-        # A small native ELF exercises archive assembly without a Rust build.
-        binary = Path(shutil.which('true')).resolve()
+        # dash is small even on systems where true is a large multicall binary.
+        # Exercise archive assembly without a Rust build.
+        binary = Path(shutil.which('dash') or shutil.which('true')).resolve()
         for backend in ('networkmanager', 'create_ap'):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as temporary:
                 work = Path(temporary)
@@ -36,7 +37,8 @@ class DebPackagingTests(unittest.TestCase):
                 launcher = payload / 'usr/bin/wifi-hotspot-tray'
                 self.assertEqual(launcher.stat().st_mode & 0o777, 0o755)
                 subprocess.run(['sh', '-n', str(launcher)], check=True)
-                self.assertTrue((payload / 'usr/lib/relayforge/settings/tray.py').is_file())
+                self.assertEqual((payload / 'usr/lib/relayforge/settings/tray.py').read_bytes(),
+                                 (ROOT / 'desktop/tray.py').read_bytes())
                 for name, option in (
                     ('usr/share/applications/relayforge-tray.desktop', '--show-icon'),
                     ('etc/xdg/autostart/relayforge-tray.desktop', '--session-start'),

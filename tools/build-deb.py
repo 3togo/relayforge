@@ -93,6 +93,8 @@ def build(args):
         for source in (ROOT / 'vendor/wifi-relay/settings').rglob('*'):
             if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
+        # Keep the imported snapshot intact; ship RelayForge's maintained tray.
+        copy(payload, 'usr/lib/relayforge/settings/tray.py', ROOT / 'desktop/tray.py')
         put(payload, 'usr/bin/wifi-hotspot-settings',
             '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/relayforge/settings/launcher.py "$@"\n', 0o755)
         copy(payload, 'usr/bin/wifi-hotspot-tray', ROOT / 'packaging/wifi-hotspot-tray')

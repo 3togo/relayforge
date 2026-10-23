@@ -101,6 +101,11 @@ sudo systemctl start relayforge-native.service
 wifi-hotspot-settings
 ```
 
+The packaged tray is maintained in `desktop/tray.py`, adapted from the pinned
+Wi-Fi Relay source. It keeps service failure reasons visible in the menu, offers
+channel guidance when concurrent sharing is blocked, and explains unavailable
+controls. The imported vendor snapshot remains unchanged.
+
 The tray starts automatically at your next graphical login. To start it now,
 run `wifi-hotspot-tray` as your desktop user (without sudo), or open **Wi-Fi
 Relay Tray** from the application menu. Login startup honors the saved

@@ -27,3 +27,7 @@ script, checking the source hash and transformation boundaries. The original
 source and notices remain in the vendor tree. New native staging copies only
 the Rust ELF service/helper and policy files; it no longer ships a derived Bash
 script. Compatibility mode retains the original vendor backend and its notices.
+
+`desktop/tray.py` adapts the MIT-licensed pinned Wi-Fi Relay tray for RelayForge.
+The original notice remains in LICENSE and the unmodified source remains under
+`vendor/wifi-relay/settings/tray.py`.
