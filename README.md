@@ -103,8 +103,9 @@ authorized without a password, so opening settings, saving and toggling the hots
 never prompt. Remote and inactive sessions are still denied. The policy still gates
 every protected call, and the pinned upstream policy that asks for administrator
 authentication on each call is available in `vendor/wifi-relay/data/`.
-GNOME Shell extensions and patched
-desktop integrations are not included. Shared-library dependencies are calculated
+The Wi-Fi Relay GNOME Shell extension ships in the package and is enabled on
+first login; patched NetworkManager applet, NetworkManager core and
+gnome-control-center integrations are not included. Shared-library dependencies are calculated
 with `dpkg-shlibdeps`; generate packages on the target distribution rather than
 assuming a binary built on a newer distribution will work on an older one.
 
@@ -144,14 +145,26 @@ Wi-Fi Relay source. It keeps service failure reasons visible in the menu, offers
 channel guidance when concurrent sharing is blocked, and explains unavailable
 controls. The imported vendor snapshot remains unchanged.
 
-The tray starts automatically at your next graphical login. To start it now,
-run `wifi-hotspot-tray` as your desktop user (without sudo), or open **Wi-Fi
-Relay Tray** from the application menu. Login startup honors the saved
-`Start desktop controls at login` preference and icon visibility preference.
-The panel needs AppIndicator/StatusNotifier support; on GNOME, an enabled
-AppIndicator extension is needed to display this tray. The package does not
-install or enable a GNOME extension. You can disable package autostart per user
-by creating `~/.config/autostart/relayforge-tray.desktop` containing:
+Desktop controls start automatically at your next graphical login, honoring the
+saved `Start desktop controls at login` preference and the icon visibility
+preference. The login helper picks the integration for your session:
+
+- **GNOME** — the bundled Wi-Fi Relay Shell extension (top-bar indicator and a
+  Quick Settings toggle) is enabled once at first login, unless you already
+  disabled it in the Extensions app. Manage it like any other extension.
+- **KDE Plasma** — the StatusNotifier tray works with the panel's built-in
+  host; no extra packages are needed.
+- **XFCE** — the panel shows the tray through `xfce4-statusnotifier-plugin`,
+  which the package recommends. Install and add it to the panel if the icon
+  does not appear.
+- **Other desktops** — any panel with StatusNotifier/AppIndicator support can
+  display the tray.
+
+To show the tray icon now, run `wifi-hotspot-tray` as your desktop user
+(without sudo), or open **Wi-Fi Relay Tray** from the application menu. All
+controls talk to the same D-Bus service, which shares the upstream through
+NetworkManager (or the create_ap backend). You can disable package autostart per
+user by creating `~/.config/autostart/relayforge-tray.desktop` containing:
 
 ```ini
 [Desktop Entry]

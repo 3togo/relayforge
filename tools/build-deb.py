@@ -91,17 +91,21 @@ def build(args):
         for source in (ROOT / 'vendor/wifi-relay/packaging/licenses').iterdir():
             if source.is_file():
                 copy(payload, doc + 'licenses/' + source.name, source)
-        # The GNOME Shell extension is not part of this package, so the helper that
-        # enables it at first login is never shipped; it could only ever no-op.
-        excluded = {'enable-extension.py'}
         for source in (ROOT / 'vendor/wifi-relay/settings').rglob('*'):
-            if (source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc'
-                    and source.name not in excluded):
+            if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
         # Keep the imported snapshot intact; ship RelayForge's maintained tray.
         copy(payload, 'usr/lib/relayforge/settings/tray.py', ROOT / 'desktop/tray.py')
+        # GNOME Shell integration ships from the pinned vendor tree so the
+        # first-login dispatcher can enable it; KDE and XFCE get the tray instead.
+        extension = 'usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io'
+        for source in (ROOT / 'vendor/wifi-relay/extension').rglob('*'):
+            if source.is_file():
+                copy(payload, extension + '/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/extension')), source)
         put(payload, 'usr/bin/wifi-hotspot-settings',
             '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/relayforge/settings/launcher.py "$@"\n', 0o755)
+        put(payload, 'usr/bin/wifi-hotspot-enable-extension',
+            '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/relayforge/settings/enable-extension.py "$@"\n', 0o755)
         copy(payload, 'usr/bin/wifi-hotspot-tray', ROOT / 'packaging/wifi-hotspot-tray')
         (payload / 'usr/bin/wifi-hotspot-tray').chmod(0o755)
         copy(payload, 'usr/share/applications/relayforge-tray.desktop',
@@ -129,6 +133,9 @@ def build(args):
             f'Package: relayforge\nVersion: {version}\nSection: net\nPriority: optional\n'
             f'Architecture: {arch}\nMaintainer: RelayForge contributors <noreply@users.noreply.github.com>\n'
             f'Installed-Size: {(size + 1023) // 1024}\nDepends: {", ".join(dependencies)}\n'
+            # The XFCE panel shows StatusNotifier icons only through this plugin;
+            # KDE provides its own host and GNOME uses the bundled Shell extension.
+            'Recommends: xfce4-statusnotifier-plugin\n'
             'Homepage: https://github.com/3togo/relayforge\n'
             'Description: Native Linux Wi-Fi sharing with GTK settings\n'
             f' Rust service using the {args.backend} backend and Wi-Fi Relay desktop controls.\n'

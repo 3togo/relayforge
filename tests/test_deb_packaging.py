@@ -37,31 +37,44 @@ class DebPackagingTests(unittest.TestCase):
                 launcher = payload / 'usr/bin/wifi-hotspot-tray'
                 self.assertEqual(launcher.stat().st_mode & 0o777, 0o755)
                 subprocess.run(['sh', '-n', str(launcher)], check=True)
+                # GNOME enables the bundled Shell extension at first login; KDE and
+                # XFCE start the StatusNotifier tray. One dispatcher covers both.
+                dispatcher = payload / 'usr/bin/wifi-hotspot-enable-extension'
+                self.assertEqual(dispatcher.stat().st_mode & 0o777, 0o755)
+                subprocess.run(['sh', '-n', str(dispatcher)], check=True)
                 self.assertEqual((payload / 'usr/lib/relayforge/settings/tray.py').read_bytes(),
                                  (ROOT / 'desktop/tray.py').read_bytes())
-                for name, option in (
-                    ('usr/share/applications/relayforge-tray.desktop', '--show-icon'),
-                    ('etc/xdg/autostart/relayforge-tray.desktop', '--session-start'),
+                for name, executable in (
+                    ('usr/share/applications/relayforge-tray.desktop', 'wifi-hotspot-tray --show-icon'),
+                    ('etc/xdg/autostart/relayforge-tray.desktop', 'wifi-hotspot-enable-extension'),
                 ):
                     entry = configparser.ConfigParser(interpolation=None)
                     entry.read(payload / name)
                     desktop = entry['Desktop Entry']
-                    self.assertEqual(desktop['Exec'], 'wifi-hotspot-tray ' + option)
-                    self.assertEqual(desktop['TryExec'], 'wifi-hotspot-tray')
+                    self.assertEqual(desktop['Exec'], executable)
+                    self.assertEqual(desktop['TryExec'], executable.split()[0])
                     self.assertNotIn('NotShowIn', desktop)
                     if shutil.which('desktop-file-validate'):
                         subprocess.run(['desktop-file-validate', str(payload / name)], check=True)
+                # The GNOME Shell extension ships from the pinned vendor tree.
+                extension = payload / 'usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io'
+                for name in ('metadata.json', 'extension.js', 'prefs.js', 'startup.js', 'stylesheet.css'):
+                    self.assertEqual((extension / name).stat().st_mode & 0o777, 0o644)
+                self.assertIn('"wifi-relay@3togo.github.io"', (extension / 'metadata.json').read_text())
                 self.assertIn('/etc/xdg/autostart/relayforge-tray.desktop',
                               (payload / 'DEBIAN/conffiles').read_text().splitlines())
                 self.assertFalse((payload / 'etc/wifi-hotspot.conf').exists())
                 self.assertFalse((payload / 'DEBIAN/postinst').exists())
-                # The packaged settings must not ship a helper for an extension that
-                # this package does not install.
+                # The first-login dispatcher ships beside the extension it enables.
                 shipped = {path.name for path in (payload / 'usr/lib/relayforge/settings').rglob('*')
                            if path.is_file()}
-                self.assertNotIn('enable-extension.py', shipped)
+                self.assertIn('enable-extension.py', shipped)
                 self.assertIn('launcher.py', shipped)
                 self.assertIn('tray.py', shipped)
+                # The XFCE panel needs this plugin to show any StatusNotifier icon.
+                recommends = subprocess.check_output(
+                    ['dpkg-deb', '--field', str(package), 'Recommends'], text=True)
+                self.assertIn('xfce4-statusnotifier-plugin', recommends)
                 # A fresh install has no /etc/wifi-hotspot.conf. The service exits with
                 # a dedicated status that the unit must never restart, so a desktop
                 # client polling GetStatus cannot re-trigger activation forever.

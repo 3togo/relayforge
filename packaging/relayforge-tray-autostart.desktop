@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Wi-Fi Relay Tray
+Name=Wi-Fi Relay Desktop Controls
 Comment=Start Wi-Fi Relay desktop controls at login
-Exec=wifi-hotspot-tray --session-start
-TryExec=wifi-hotspot-tray
+Exec=wifi-hotspot-enable-extension
+TryExec=wifi-hotspot-enable-extension
 Icon=io.github.erhanzeyrek.WifiHotspot
 Terminal=false
 NoDisplay=true
