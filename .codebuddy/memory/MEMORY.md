@@ -46,6 +46,20 @@ extension and desktop tray are **vendored verbatim**, not ported.
   `tools/stage-native.py` stages; changing a staged integration file without
   updating the `include_bytes!` template fails every deployment test.
 
+## Desktop integration (GNOME/KDE/XFCE)
+- GNOME: bundled Shell extension `vendor/wifi-relay/extension/` →
+  `usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io/`; enabled once at
+  first login by `usr/bin/wifi-hotspot-enable-extension` (vendored
+  `enable-extension.py`, respects explicit user choice + auto_start pref).
+- KDE/XFCE/other: the same dispatcher execs the StatusNotifier tray
+  (`desktop/tray.py`, AyatanaAppIndicator3). XFCE needs
+  `xfce4-statusnotifier-plugin` (Debian `Recommends:`).
+- Autostart conffile `etc/xdg/autostart/relayforge-tray.desktop` runs the
+  dispatcher; the menu entry runs `wifi-hotspot-tray --show-icon`.
+- NM integration is service-side only (volatile profiles, radio watch, band
+  switch); `integration/` patched nm-applet/nm-core/gnome-control-center debs
+  stay deliberately unshipped.
+
 ## Layout
 - `crates/relayforge-core/` — no I/O: config schema, radio parsing, lifecycle, subnet.
 - `crates/relayforge-service/` — zbus service, `networkmanager.rs`, `create_ap.rs`,
