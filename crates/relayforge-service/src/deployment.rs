@@ -186,7 +186,7 @@ fn integration(path: &str, backend: &str) -> Option<&'static [u8]> {
             "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.conf"
         )),
         POLKIT => Some(include_bytes!(
-            "../../../vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.policy"
+            "../../../packaging/io.github.erhanzeyrek.WifiHotspot.policy"
         )),
         LICENSE => Some(include_bytes!("../../../LICENSE")),
         _ => None,
