@@ -9,6 +9,10 @@ use serde_json::Value;
 pub const BUS_NAME: &str = "io.github.erhanzeyrek.WifiHotspot";
 pub const OBJECT_PATH: &str = "/io/github/erhanzeyrek/WifiHotspot";
 pub const MANAGE_ACTION: &str = "io.github.erhanzeyrek.WifiHotspot.manage";
+/// Reading or rewriting the stored configuration, which holds the password.
+/// Kept separate from routine operation so a process in the desktop session
+/// cannot read the secret silently, while Start/Stop stay prompt-free.
+pub const CREDENTIALS_ACTION: &str = "io.github.erhanzeyrek.WifiHotspot.credentials";
 pub const MAX_MESSAGE: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,16 +30,18 @@ pub enum Method {
 }
 
 impl Method {
+    /// The Polkit action required to call this method, if any.
+    pub fn action(self) -> Option<&'static str> {
+        match self {
+            Self::GetConfig | Self::SetConfig => Some(CREDENTIALS_ACTION),
+            Self::Start | Self::Stop | Self::SwitchBandAndReconnect | Self::PrepareFirewall => {
+                Some(MANAGE_ACTION)
+            }
+            Self::GetStatus | Self::GetClients | Self::GetInterfaces | Self::GetCapabilities => None,
+        }
+    }
     pub fn protected(self) -> bool {
-        matches!(
-            self,
-            Self::Start
-                | Self::Stop
-                | Self::GetConfig
-                | Self::SetConfig
-                | Self::SwitchBandAndReconnect
-                | Self::PrepareFirewall
-        )
+        self.action().is_some()
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -285,6 +291,30 @@ mod tests {
         assert!(Method::Stop.protected());
         assert!(!Method::GetStatus.protected());
         assert!(!Method::GetClients.protected());
+    }
+    #[test]
+    fn credentials_are_a_separate_privilege_from_routine_operation() {
+        // Reading or rewriting the configuration exposes the hotspot password, so it
+        // must never share the prompt-free action used for Start/Stop.
+        for method in [Method::GetConfig, Method::SetConfig] {
+            assert_eq!(method.action(), Some(CREDENTIALS_ACTION), "{method:?}");
+        }
+        for method in [
+            Method::Start,
+            Method::Stop,
+            Method::SwitchBandAndReconnect,
+            Method::PrepareFirewall,
+        ] {
+            assert_eq!(method.action(), Some(MANAGE_ACTION), "{method:?}");
+        }
+        for method in [
+            Method::GetStatus,
+            Method::GetClients,
+            Method::GetInterfaces,
+            Method::GetCapabilities,
+        ] {
+            assert_eq!(method.action(), None, "{method:?}");
+        }
     }
 
     #[test]

@@ -49,13 +49,30 @@ def remove_profile(path):
     state['active'].pop(path.replace('/Settings/','/ActiveConnection/'),None)
 
 
+ACCESS_POINTS={ROOT+'/AccessPoint/1':dict(ssid=b'Test upstream',frequency=2412,strength=60),
+                ROOT+'/AccessPoint/2':dict(ssid=b'Test upstream',frequency=2437,strength=80),
+                ROOT+'/AccessPoint/3':dict(ssid=b'Test upstream',frequency=5745,strength=70),
+                ROOT+'/AccessPoint/4':dict(ssid=b'Other network',frequency=2437,strength=90)}
+
+
+def station_frequency(control):
+    if control.get('band5'):return 5745
+    if control.get('roamed') or control.get('upstream_changed'):return 2437
+    return 2412
+
+
 def property_value(path,interface,name):
     control=CONTROL()
+    if path in ACCESS_POINTS:
+        point=ACCESS_POINTS[path]
+        return {'Ssid':GLib.Variant('ay',point['ssid']),'Frequency':GLib.Variant('u',point['frequency']),
+                'Strength':GLib.Variant('y',point['strength']),'HwAddress':GLib.Variant('s','aa:bb:cc:dd:ee:01')}[name]
     if path==ROOT and name=='Capabilities':
         return GLib.Variant('au',[0x7001] if control.get('native') else [])
     if path==ROOT+'/Devices/1':
         return {'State':GLib.Variant('u',30 if control.get('upstream_missing') else 100),'ActiveConnection':GLib.Variant('o',ROOT+'/ActiveConnection/1'),
-                'WirelessCapabilities':GLib.Variant('u',0 if control.get('no_ap') else 0x40)}[name]
+                'WirelessCapabilities':GLib.Variant('u',0 if control.get('no_ap') else 0x40),
+                'AccessPoints':GLib.Variant('ao',[path for path in ACCESS_POINTS if not control.get('no_scan')])}[name]
     if path==ROOT+'/ActiveConnection/1':
         return {'State':GLib.Variant('u',2),'Uuid':GLib.Variant('s','22222222-2222-4222-a222-222222222222' if control.get('upstream_changed') else '11111111-1111-4111-a111-111111111111')}[name]
     if '/Devices/' in path:
@@ -84,8 +101,7 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             request=json.loads(args[0]);iface=request.get('interface')
             if method=='Radio':
                 result=dict(CAPTURE)
-                if control.get('upstream_changed') or control.get('roamed'):
-                    result['link']=result['link'].replace('2412','2437')
+                result['link']=result['link'].replace('2412',str(station_frequency(control)))
             elif method=='Identity':
                 if iface==CAPTURE['wifi_iface']:
                     result=dict(ifindex=8 if control.get('parent_replaced') else 7,mac='02:11:22:33:44:55',phy=0)
@@ -121,10 +137,15 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             elif method=='VerifyAp':
                 if control.get('bad_ap'):
                     raise ValueError('Wrong AP channel')
-                assert iface in state['interfaces'] and request['frequency']==(2437 if control.get('roamed') else 2412)
+                assert iface in state['interfaces'] and request['frequency']==station_frequency(control)
                 result=None
             elif method=='Clients':
                 result=[dict(mac='02:aa:bb:cc:dd:ee',ip='192.0.2.2',hostname='')] if control.get('client') else []
+            elif method=='EmitRadio':
+                # A kill switch is announced by NetworkManager, not by the service.
+                BUS.emit_signal(None,ROOT,'org.freedesktop.DBus.Properties','PropertiesChanged',
+                                GLib.Variant('(sa{sv}as)',(NM,{'WirelessEnabled':GLib.Variant('b',bool(request.get('enabled')))},[])))
+                result=None
             else:
                 raise ValueError('Unknown test operation')
             reply=GLib.Variant('(s)',(json.dumps(result),))
@@ -140,6 +161,31 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
                     GLib.timeout_add(20,finish)
                     return
             invocation.return_value(reply)
+        elif interface=='org.freedesktop.NetworkManager.Device.Wireless' and method=='RequestScan':
+            event('scan-requested')
+            if control.get('fail_scan'):
+                raise ValueError('Simulated scan refusal')
+            invocation.return_value(GLib.Variant('()',()))
+        elif method=='GetConnectionByUuid':
+            invocation.return_value(GLib.Variant('(o)',(ROOT+'/Settings/1',)))
+        elif method=='ActivateConnection':
+            connection,device,specific=args
+            event('band-activate',device=device,specific=specific)
+            if control.get('switch_fails'):
+                raise ValueError('Simulated band switch failure')
+            if specific in ACCESS_POINTS:
+                frequency=ACCESS_POINTS[specific]['frequency']
+                control['roamed']=frequency==2437
+                control['band5']=frequency==5745
+                if control.get('roam_back'):
+                    control['roamed']=False
+                    control['band5']=False
+                (DIRECTORY/'control.json').write_text(json.dumps(control))
+            elif control.get('roam_back'):
+                control['roamed']=False
+                control['band5']=False
+                (DIRECTORY/'control.json').write_text(json.dumps(control))
+            invocation.return_value(GLib.Variant('(o)',(ROOT+'/ActiveConnection/1',)))
         elif method=='GetDeviceByIpIface':
             iface=args[0]
             if iface==CAPTURE['wifi_iface']:
@@ -153,7 +199,8 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             invocation.return_value(GLib.Variant('(ao)',([ROOT+'/Settings/1',*state['profiles']],)))
         elif method=='GetSettings':
             if path==ROOT+'/Settings/1':
-                settings={'connection':{'uuid':GLib.Variant('s','11111111-1111-4111-a111-111111111111'),'id':GLib.Variant('s','Untouched upstream')}}
+                settings={'connection':{'uuid':GLib.Variant('s','11111111-1111-4111-a111-111111111111'),'id':GLib.Variant('s','Untouched upstream')},
+                          '802-11-wireless':{'mode':GLib.Variant('s','infrastructure')}}
             else:
                 record=state['profiles'][path]
                 settings={section:{key:record['variant'].lookup_value(section,None).lookup_value(key,None)
@@ -171,11 +218,25 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             invocation.return_value(GLib.Variant('()',()))
         elif method=='AddAndActivateConnection2':
             settings,device,specific,options=args
+            if settings['802-11-wireless'].get('mode')!='ap':
+                # Volatile band-constrained activation of the upstream station.
+                assert settings['802-11-wireless']['band'] in ('a','bg')
+                assert settings['connection']['id']=='RelayForge band switch'
+                event('band-pin',band=settings['802-11-wireless']['band'])
+                if specific in ACCESS_POINTS:
+                    frequency=ACCESS_POINTS[specific]['frequency']
+                    control['roamed']=frequency==2437
+                    control['band5']=frequency==5745
+                    (DIRECTORY/'control.json').write_text(json.dumps(control))
+                invocation.return_value(GLib.Variant('(ooa{sv})',(ROOT+'/Settings/1',ROOT+'/ActiveConnection/1',{})))
+                return
             assert options=={'persist':'volatile','bind-activation':'dbus-client'}
             assert settings['connection']['autoconnect'] is False
             assert settings['802-11-wireless']['mode']=='ap'
             assert settings['802-11-wireless']['channel']==(6 if control.get('roamed') else 1)
-            assert settings['802-11-wireless-security']['psk-flags']==2
+            # A psk-flags value makes NetworkManager discard the supplied PSK and
+            # ask an agent for it, so the profile must not carry one.
+            assert 'psk-flags' not in settings['802-11-wireless-security']
             assert settings['802-11-wireless-security']['proto']==['rsn']
             assert settings['802-11-wireless-security']['pairwise']==['ccmp']
             assert settings['802-11-wireless-security']['group']==['ccmp']
@@ -228,16 +289,20 @@ def owner_changed(_bus,_sender,_path,_interface,_signal,params):
 
 register(ROOT,'''<node><interface name="org.freedesktop.NetworkManager">
 <method name="GetDeviceByIpIface"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
+<method name="ActivateConnection"><arg type="o" direction="in"/><arg type="o" direction="in"/><arg type="o" direction="in"/><arg type="o" direction="out"/></method>
 <method name="AddAndActivateConnection2"><arg type="a{sa{sv}}" direction="in"/><arg type="o" direction="in"/><arg type="o" direction="in"/><arg type="a{sv}" direction="in"/><arg type="o" direction="out"/><arg type="o" direction="out"/><arg type="a{sv}" direction="out"/></method>
 <method name="DeactivateConnection"><arg type="o" direction="in"/></method></interface></node>''')
 register(ROOT,device_xml())
-register(ROOT+'/Settings','''<node><interface name="org.freedesktop.NetworkManager.Settings"><method name="ListConnections"><arg type="ao" direction="out"/></method></interface></node>''')
+register(ROOT+'/Settings','''<node><interface name="org.freedesktop.NetworkManager.Settings"><method name="ListConnections"><arg type="ao" direction="out"/></method><method name="GetConnectionByUuid"><arg type="s" direction="in"/><arg type="o" direction="out"/></method></interface></node>''')
+register(ROOT+'/Devices/1','''<node><interface name="org.freedesktop.NetworkManager.Device.Wireless"><method name="RequestScan"><arg type="a{sv}" direction="in"/></method></interface></node>''')
+for index in ACCESS_POINTS:
+    register(index,device_xml())
 profile_xml='''<node><interface name="org.freedesktop.NetworkManager.Settings.Connection"><method name="GetSettings"><arg type="a{sa{sv}}" direction="out"/></method><method name="Delete"/></interface></node>'''
 for number in (1,2):
     register(ROOT+f'/Settings/{number}',profile_xml)
     register(ROOT+f'/Devices/{number}',device_xml())
     register(ROOT+f'/ActiveConnection/{number}',device_xml())
-register(ROOT,'<node><interface name="'+TEST+'">'+''.join('<method name="'+name+'"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>' for name in ('Radio','Identity','Interfaces','Routes','Create','Delete','RestoreMode','VerifyAp','Clients'))+'</interface></node>')
+register(ROOT,'<node><interface name="'+TEST+'">'+''.join('<method name="'+name+'"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>' for name in ('Radio','Identity','Interfaces','Routes','Create','Delete','RestoreMode','VerifyAp','Clients','EmitRadio'))+'</interface></node>')
 BUS.signal_subscribe('org.freedesktop.DBus','org.freedesktop.DBus','NameOwnerChanged','/org/freedesktop/DBus',None,Gio.DBusSignalFlags.NONE,owner_changed)
 BUS.call_sync('org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus','RequestName',GLib.Variant('(su)',(NM,4)),None,Gio.DBusCallFlags.NONE,5000,None)
 event('ready')

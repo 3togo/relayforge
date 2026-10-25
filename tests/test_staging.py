@@ -25,6 +25,7 @@ class StagingTests(unittest.TestCase):
             self.assertFalse((output/'etc').exists())
             self.assertTrue(all('python' not in path and 'worker' not in path for path in manifest))
             self.assertIn('--native-networkmanager',(output/'usr/lib/systemd/system/relayforge-native.service').read_text())
+            self.assertIn('--recover-all',(output/'usr/lib/systemd/system/relayforge-native.service').read_text())
             with self.assertRaises(FileExistsError):
                 staging.stage(binary,output)
             self.assertTrue((output/'manifest.json').exists())
@@ -73,6 +74,7 @@ class StagingTests(unittest.TestCase):
             self.assertTrue(all('worker' not in path and 'wifi-hotspot-daemon.py' not in path for path in manifest))
             unit=(output/'usr/lib/systemd/system/relayforge-create-ap.service').read_text()
             self.assertIn('--native-create-ap --legacy-root /usr/lib/relayforge',unit)
+            self.assertIn('--recover-all',unit)
             activation=(output/'usr/share/dbus-1/system-services/io.github.erhanzeyrek.WifiHotspot.service').read_text()
             self.assertIn('SystemdService=relayforge-create-ap.service',activation)
             self.assertFalse((output/'etc').exists())

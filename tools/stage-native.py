@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 PAYLOAD={
     'usr/share/doc/relayforge/LICENSE':ROOT/'LICENSE',
     'usr/share/dbus-1/system.d/io.github.erhanzeyrek.WifiHotspot.conf':ROOT/'vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.conf',
-    'usr/share/polkit-1/actions/io.github.erhanzeyrek.WifiHotspot.policy':ROOT/'vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.policy',
+    'usr/share/polkit-1/actions/io.github.erhanzeyrek.WifiHotspot.policy':ROOT/'packaging/io.github.erhanzeyrek.WifiHotspot.policy',
 }
 
 

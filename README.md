@@ -26,6 +26,9 @@ and durable recovery from interrupted final cleanup. Its
 [validation report](docs/backend-audit-validation.md) records the exact candidate
 and offline results. [Native suspend/resume](docs/native-suspend.md) now coordinates
 logind sleep, owned cleanup and recovery of a prior authorized sharing request.
+[Rust band switching](docs/native-band-switch.md) now reconnects the upstream to a
+permitted hotspot channel over D-Bus, and a [Wi-Fi radio watch](docs/native-radio-watch.md)
+releases owned sharing when the radio is switched off.
 Its [validation report](docs/native-suspend-validation.md) records offline coverage
 and remaining live-suspend limits. A [race audit](docs/native-suspend-audit.md)
 hardens cancellation, status publication and inhibitor recovery; its
@@ -57,6 +60,7 @@ checks and the constraint preventing hotspot activation without changing upstrea
 
 ```sh
 cargo build --workspace --all-targets --locked
+cargo build --release --locked -p relayforge-service
 cargo test --workspace --locked
 python3 tools/check-vendor.py
 dbus-run-session -- /usr/bin/python3 -m unittest discover -s tests -v
@@ -64,6 +68,13 @@ dbus-run-session -- /usr/bin/python3 -m unittest discover -s tests -v
 
 Tests use a disposable session bus and simulated networking. They do not install
 packages, start a hotspot, change the firewall, or use a physical Wi-Fi adapter.
+The deployment suites stage the service executable as a payload file, and the
+deployment engine refuses any single file larger than 64 MiB; a development build
+with full symbols exceeds that bound, so the suite uses an up-to-date optimized
+build when one exists. Set `RELAYFORGE_BINARY` to choose an executable
+explicitly. Checked-out fixtures must not be group- or world-writable, because
+the service rejects insecure configuration and installation trees
+(`umask 0022; chmod -R g-w,o-w .` repairs a permissive checkout).
 
 ## Build a Debian package
 
@@ -80,10 +91,18 @@ user from the repository root:
 The script builds the locked release executable and writes a `.deb` under
 `artifacts/deb/`. Use `--output-dir PATH` to change the destination, or
 `--binary /absolute/path/relayforge-service` to package an existing release ELF
-without invoking Cargo. Existing packages are never overwritten. Each package
+without invoking Cargo. An existing package of the same name is preserved unless
+`--force` is passed; a forced replacement is written to a temporary file and renamed
+into place, so an interrupted build never leaves a partial package. Each package
 contains one selected backend, the GTK settings/tray code, settings and tray
 launchers, a login autostart entry, D-Bus/Polkit policies and its systemd unit.
 GTK3 and Ayatana AppIndicator support are required package dependencies.
+The package ships its own Polkit action
+(`packaging/io.github.erhanzeyrek.WifiHotspot.policy`): the active local session is
+authorized without a password, so opening settings, saving and toggling the hotspot
+never prompt. Remote and inactive sessions are still denied. The policy still gates
+every protected call, and the pinned upstream policy that asks for administrator
+authentication on each call is available in `vendor/wifi-relay/data/`.
 GNOME Shell extensions and patched
 desktop integrations are not included. Shared-library dependencies are calculated
 with `dpkg-shlibdeps`; generate packages on the target distribution rather than
@@ -100,6 +119,25 @@ sudo systemctl daemon-reload
 sudo systemctl start relayforge-native.service
 wifi-hotspot-settings
 ```
+
+### Troubleshooting: "Hotspot service unavailable"
+
+The settings window shows this whenever `io.github.erhanzeyrek.WifiHotspot` has no
+owner on the system bus. The most common cause on a fresh installation is a missing
+`/etc/wifi-hotspot.conf`: the service starts, finds nothing to read, and exits with
+status 17. Check the unit's journal for the exact path and the command to run:
+
+```sh
+journalctl -u relayforge-native.service -n 20
+sudo /usr/lib/relayforge/relayforge-service --init-config /etc/wifi-hotspot.conf \
+  --wifi-interface wlp2s0 --backend networkmanager
+sudo systemctl start relayforge-native.service
+```
+
+Status 17 is deliberately listed in `RestartPreventExitStatus=` on both units and
+`StartLimitIntervalSec=300` bounds retries, so an unconfigured install reports the
+problem once instead of restarting every few seconds. Initialization never replaces
+an existing configuration, so it is safe to run when one may already exist.
 
 The packaged tray is maintained in `desktop/tray.py`, adapted from the pinned
 Wi-Fi Relay source. It keeps service failure reasons visible in the menu, offers
@@ -161,8 +199,10 @@ dbus-run-session -- ./target/debug/relayforge-service \
 ```
 
 Initialization creates a random password, writes mode 0600 and never replaces an
-existing path. It does not detect the build machine's adapters. The optional
-SSID/interface arguments set fresh-install values only; no password is printed.
+existing path. It does not detect the build machine's adapters unless
+`--detect-interface` is passed, and then only when exactly one Wi-Fi adapter
+exists. The optional SSID/interface arguments set fresh-install values only; no
+password is printed.
 `--demo-config` uses the same native disk store as system mode and simulated
 networking. GTK controls can connect with the private-bus environment from the
 previous example.
@@ -177,6 +217,19 @@ Read-only checks against a physical adapter are also available:
 These commands exit without opening D-Bus or starting the networking worker.
 Preflight reports a plan; it does not activate sharing or switch the upstream
 connection. See [native radio diagnostics](docs/native-radio.md) for limitations.
+
+An upgrade from the packed Wi-Fi Relay default can leave the literal `wlan0`
+assignment behind on hardware whose adapter has another name. The ported
+installer repair rewrites only those obsolete assignments, keeps every other
+line, comment and credential byte-for-byte, and never writes when `wlan0` is
+present or the hardware is ambiguous:
+
+```sh
+sudo ./target/release/relayforge-service --repair-config-interface /etc/wifi-hotspot.conf
+```
+
+Pass `--wifi-interface NAME` to choose the replacement on a machine with several
+Wi-Fi adapters.
 
 ## Compatibility and deployment boundary
 

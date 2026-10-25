@@ -83,6 +83,24 @@ Read-only firewall queries have bounded output and execution deadlines; failed
 queries cannot prove cleanup. Unknown or unverified child state also blocks
 success. No global orphan scan or foreign hotspot adoption was added.
 
+## Service teardown recovery
+
+The pinned systemd unit runs `nm_backend.py --recover-all` after every service
+stop, including a crash, so a killed daemon never strands an owned profile,
+interface or helper process. The native units mirror that contract with
+`ExecStopPost=relayforge-service <native-mode> --recover-all`. The flag reuses
+the normal mode selection, constructs the same backend, runs its journal-scoped
+`recover()` (which also reaps stale Relay hostapd processes in create_ap mode)
+and exits without registering on the bus.
+
+Recovery needs no configuration file, no live worker and no ownership of the
+bus name: it is deliberately skipped past `EXIT_MISSING_CONFIG` and the
+BACKEND gate so teardown also runs when the installation is broken. It is
+idempotent — a clean stop leaves an empty journal and `--recover-all` reports
+success without touching anything. Compatibility mode keeps its own
+`nm_backend.py --recover-all` hook; native recovery never reads compatibility
+state files.
+
 ## Upgrade and operational limits
 
 The native service now expects `ROOT/native/create_ap`, not the original

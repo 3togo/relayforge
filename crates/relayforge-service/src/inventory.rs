@@ -8,6 +8,15 @@ pub struct Interfaces {
     pub all_interfaces: Vec<String>,
 }
 
+/// Choose an adapter only when a fresh install has one unambiguous Wi-Fi device.
+pub fn unique_wifi(root: &Path) -> Option<String> {
+    let found = discover(root).ok()?;
+    match found.wifi_interfaces.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
+}
+
 pub fn discover(root: &Path) -> Result<Interfaces, &'static str> {
     let mut wifi = Vec::new();
     let mut all = Vec::new();
@@ -60,6 +69,10 @@ mod tests {
         let found = discover(&root).unwrap();
         assert_eq!(found.wifi_interfaces, ["wlp2s0", "wrnm012345"]);
         assert_eq!(found.all_interfaces, ["eth0", "wlp2s0", "wrnm012345"]);
+        // Detection is only unambiguous with exactly one Wi-Fi adapter.
+        assert_eq!(unique_wifi(&root), None);
+        std::fs::remove_dir_all(root.join("wrnm012345")).unwrap();
+        assert_eq!(unique_wifi(&root).as_deref(), Some("wlp2s0"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

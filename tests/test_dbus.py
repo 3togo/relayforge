@@ -24,7 +24,30 @@ gi.require_version('Gio', '2.0')
 from gi.repository import Gio, GLib
 from service_client import ServiceClient, decode_reply, BUS_NAME, OBJECT_PATH
 
-BINARY = Path(os.environ.get('RELAYFORGE_BINARY', ROOT / 'target/debug/relayforge-service'))
+DEPLOYMENT_LIMIT = 64 * 1024 * 1024
+
+
+def _binary():
+    """Choose the executable used for black-box tests.
+
+    Deployment tests stage the executable itself as a payload file, and the
+    deployment engine refuses any file above 64 MiB. A development build with
+    full symbols routinely exceeds that bound, so an up-to-date optimized build
+    is preferred when the development build cannot be staged at all.
+    """
+    explicit = os.environ.get('RELAYFORGE_BINARY')
+    if explicit:
+        return Path(explicit)
+    debug = ROOT / 'target/debug/relayforge-service'
+    release = ROOT / 'target/release/relayforge-service'
+    if release.is_file() and (not debug.is_file() or (
+            debug.stat().st_size > DEPLOYMENT_LIMIT
+            and release.stat().st_mtime >= debug.stat().st_mtime)):
+        return release
+    return debug
+
+
+BINARY = _binary()
 
 
 def connect():
@@ -260,8 +283,12 @@ class CompatibilityTests(unittest.TestCase):
         with fake_polkit() as observed, running('--demo-polkit') as (bus, _):
             decode_reply('GetConfig', call(bus, 'GetConfig'))
             self.assertEqual(observed[0][0], ('system-bus-name', {'name': bus.get_unique_name()}))
-            self.assertEqual(observed[0][1], BUS_NAME + '.manage')
+            # The configuration holds the password: it is a separate privilege from
+            # routine operation, so a session process cannot read it silently.
+            self.assertEqual(observed[0][1], BUS_NAME + '.credentials')
             self.assertEqual(observed[0][3], 1)
+            self.assertTrue(decode_reply('Start', call(bus, 'Start'))['success'])
+            self.assertEqual(observed[1][1], BUS_NAME + '.manage')
 
     def test_polkit_denial_and_unavailable_authority_fail_closed(self):
         with fake_polkit(False), running('--demo-polkit') as (bus, _):
@@ -373,6 +400,27 @@ class CompatibilityTests(unittest.TestCase):
                 wait_for(lambda: len(replies) == 2 and any(name == 'ClientsChanged' for name, _ in signals))
                 self.assertTrue(any(name == 'StatusChanged' and data['active'] for name, data in signals))
                 self.assertTrue(any(name == 'StatusChanged' and data['state'] == 'idle' for name, data in signals))
+            finally:
+                client.close()
+
+    def test_operations_broadcast_transition_then_final_status(self):
+        """The pinned dispatcher emits connecting/stopping before the operation."""
+        with running():
+            ready, signals, replies = [], [], []
+            client = ServiceClient(lambda error: ready.append(error), lambda name, data: signals.append((name, data)))
+            try:
+                wait_for(lambda: ready)
+                self.assertIsNone(ready[0])
+                client.call('Start', lambda value, error: replies.append((value, error)))
+                wait_for(lambda: replies)
+                self.assertTrue(replies[0][0]['success'])
+                client.call('Stop', lambda value, error: replies.append((value, error)))
+                states = lambda: [data['state'] for name, data in signals
+                                  if name == 'StatusChanged' and isinstance(data, dict)]
+                wait_for(lambda: len(replies) == 2 and len(states()) >= 4)
+                self.assertTrue(replies[1][0])
+                # Transition first, operation result after; Stop reports idle last.
+                self.assertEqual(states(), ['connecting', 'active', 'stopping', 'idle'])
             finally:
                 client.close()
 

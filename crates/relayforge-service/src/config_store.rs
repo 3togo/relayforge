@@ -65,6 +65,9 @@ impl Stamp {
     }
 }
 
+/// The only failure that means "nothing has been configured yet".
+pub const MISSING: &str = "Configuration is missing; initialize it with --init-config";
+
 pub struct ConfigFile {
     directory: File,
     name: CString,
@@ -119,6 +122,11 @@ impl ConfigFile {
             )
         };
         if fd < 0 {
+            // A fresh installation has no configuration at all. A distinct message lets
+            // the service exit with a status that systemd must not restart.
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                return Err(MISSING);
+            }
             return Err("Cannot open private configuration file");
         }
         // SAFETY: successful openat returns a new owned descriptor.
@@ -247,6 +255,116 @@ impl ConfigFile {
         let config = config::merge(&current, patch)?;
         self.commit(&config, Some(&stamp))?;
         Ok(())
+    }
+
+    /// Raw private bytes plus the group an atomic replacement must preserve.
+    fn bytes(&self) -> Result<(Vec<u8>, u32), &'static str> {
+        let file = self.open_target()?;
+        let meta = file
+            .metadata()
+            .map_err(|_| "Cannot inspect configuration file")?;
+        if meta.len() > MAX_CONFIG as u64 {
+            return Err("Configuration exceeds 64 KiB");
+        }
+        let mut bytes = Vec::new();
+        (&file)
+            .take(MAX_CONFIG as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read configuration file")?;
+        if bytes.len() > MAX_CONFIG {
+            return Err("Configuration exceeds 64 KiB");
+        }
+        Ok((bytes, meta.gid()))
+    }
+
+    /// Replace the private file with literal bytes, preserving owner and group.
+    fn replace_bytes(&self, bytes: &[u8], gid: u32) -> Result<(), &'static str> {
+        let (name, mut file) = self.temporary()?;
+        let result = (|| {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| "Cannot protect configuration temporary file")?;
+            // SAFETY: file is an owned descriptor created in the retained directory.
+            if unsafe { libc::fchown(file.as_raw_fd(), self.uid, gid) } != 0 {
+                return Err("Cannot preserve configuration file ownership");
+            }
+            file.write_all(bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|_| "Cannot write and sync configuration temporary file")?;
+            // SAFETY: both names are C strings relative to the retained directory.
+            let outcome = unsafe {
+                libc::renameat2(
+                    self.directory.as_raw_fd(),
+                    name.as_ptr(),
+                    self.directory.as_raw_fd(),
+                    self.name.as_ptr(),
+                    0,
+                )
+            };
+            if outcome != 0 {
+                return Err("Cannot atomically replace configuration");
+            }
+            self.directory.sync_all().map_err(|_| {
+                "Configuration replaced but directory sync failed; reload before retrying"
+            })?;
+            Ok(())
+        })();
+        self.unlink(&name);
+        result
+    }
+
+    /// Port of the pinned installer repair: replace an obsolete `wlan0` default
+    /// only when `wlan0` is absent and exactly one Wi-Fi adapter (or an explicit
+    /// interface) is available. Every other line, comment and assignment is kept
+    /// byte-for-byte so an upgrade cannot silently rewrite settings.
+    pub fn repair_interface(
+        &self,
+        interface: Option<&str>,
+        net: &Path,
+    ) -> Result<bool, &'static str> {
+        if net.join("wlan0").exists() {
+            return Ok(false);
+        }
+        let Some(interface) = interface
+            .map(str::to_owned)
+            .or_else(|| crate::inventory::unique_wifi(net))
+        else {
+            return Ok(false);
+        };
+        config::validate(&Config::from([
+            ("WIFI_IFACE".into(), interface.clone()),
+            ("INTERNET_IFACE".into(), interface.clone()),
+        ]))?;
+        let (original, gid) = self.bytes()?;
+        let mut used = [false; 3];
+        let mut lines = Vec::new();
+        for line in original.split(|byte| *byte == b'\n') {
+            let (body, carriage) = match line.strip_suffix(b"\r") {
+                Some(body) => (body, true),
+                None => (line, false),
+            };
+            let mut updated = body.to_vec();
+            // The historical installer could leave the first assignment as a literal.
+            if !used[0] && body == b"WIFI_IFACE=INTERNET_IFACE=wlan0" {
+                updated = format!("WIFI_IFACE={interface}").into_bytes();
+                used[0] = true;
+            } else if !used[1] && body == b"WIFI_IFACE=wlan0" {
+                updated = format!("WIFI_IFACE={interface}").into_bytes();
+                used[1] = true;
+            } else if !used[2] && body == b"INTERNET_IFACE=wlan0" {
+                updated = format!("INTERNET_IFACE={interface}").into_bytes();
+                used[2] = true;
+            }
+            if carriage {
+                updated.push(b'\r');
+            }
+            lines.push(updated);
+        }
+        let updated = lines.join(&b'\n');
+        if updated == original {
+            return Ok(false);
+        }
+        self.replace_bytes(&updated, gid)?;
+        Ok(true)
     }
 
     pub fn initialize(&self, ssid: &str, interface: Option<&str>) -> Result<bool, &'static str> {
@@ -382,6 +500,44 @@ mod tests {
         assert!(file.commit(&config, Some(&stamp)).is_err());
         assert_eq!(file.read().unwrap().0["SSID"], "External");
         assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn interface_repair_touches_only_the_obsolete_default() {
+        let root = Fixture::new();
+        let net = root.0.join("net");
+        std::fs::create_dir_all(net.join("wlp4s0/wireless")).unwrap();
+        // A historical installer could leave the first assignment as a literal.
+        std::fs::write(
+            root.path(),
+            "WIFI_IFACE=INTERNET_IFACE=wlan0\nINTERNET_IFACE=wlan0\nSSID=Mine\nPASSPHRASE=private-password\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let file = root.file();
+        assert!(file.repair_interface(None, &net).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.path()).unwrap(),
+            "WIFI_IFACE=wlp4s0\nINTERNET_IFACE=wlp4s0\nSSID=Mine\nPASSPHRASE=private-password\n"
+        );
+        assert_eq!(std::fs::metadata(root.path()).unwrap().mode() & 0o777, 0o600);
+        assert!(!file.repair_interface(None, &net).unwrap());
+        // Ambiguous hardware is refused; an explicit interface still repairs.
+        std::fs::create_dir_all(net.join("wlp5s0/wireless")).unwrap();
+        std::fs::write(root.path(), "WIFI_IFACE=wlan0\nINTERNET_IFACE=wlan0\n").unwrap();
+        assert!(!file.repair_interface(None, &net).unwrap());
+        assert!(file.repair_interface(Some("wlp5s0"), &net).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(root.path()).unwrap(),
+            "WIFI_IFACE=wlp5s0\nINTERNET_IFACE=wlp5s0\n"
+        );
+        // A present wlan0 is never rewritten, and an invalid name never writes.
+        std::fs::create_dir(net.join("wlan0")).unwrap();
+        assert!(!file.repair_interface(Some("wlp5s0"), &net).unwrap());
+        std::fs::remove_dir(net.join("wlan0")).unwrap();
+        let before = std::fs::read(root.path()).unwrap();
+        assert!(file.repair_interface(Some("-bad name"), &net).is_err());
+        assert_eq!(std::fs::read(root.path()).unwrap(), before);
     }
 
     #[test]

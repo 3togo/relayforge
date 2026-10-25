@@ -96,6 +96,9 @@ D-Bus activation file, original bus/Polkit policies, MIT license and a hash/mode
 manifest. It contains no credentials or configuration, no Python backend and no
 desktop-control replacement. Staging never installs files, enables a unit or
 reloads D-Bus. The output is a reviewable payload, not a distribution package.
+The unit's `ExecStopPost` re-invokes the service with `--recover-all`, so owned
+profiles and helper interfaces are released even after a crashed daemon
+([recovery](native-recovery.md)).
 
 For a future fresh installation, configuration initialization supports:
 

@@ -14,6 +14,8 @@ unchanged GTK / GNOME Shell / tray controls
         |-- native sysfs inventory
         |-- native radio parsing / startup preflight
         |-- native NetworkManager controller --> NetworkManager / kernel
+        |-- Rust band switching --> NetworkManager / kernel
+        |-- Rust Wi-Fi radio watch --> NetworkManager / kernel
         |-- Rust create_ap supervisor --> Rust instance / daemons / kernel
         `-- compatibility JSON pipe --> pinned Python adapter
                                            |
@@ -32,7 +34,10 @@ requires explicit stored credentials.
 relayforge-service owns the existing D-Bus name without replacement or queueing.
 It authorizes protected calls using the bus-assigned unique sender, passes that
 identity to Polkit as a system-bus-name subject and fails closed on errors. Config
-reads are protected because they contain credentials. Status and clients use
+reads are authorized because they contain credentials; the shipped policy grants
+that authorization to the active local session without a prompt and denies every
+other caller (see [the policy decision](../packaging/io.github.erhanzeyrek.WifiHotspot.policy)).
+Status and clients use
 snapshots so backend work cannot block them. A bounded request budget reserves
 capacity for Stop. Configuration is never placed in process arguments or emitted
 in Rust diagnostics.
@@ -47,8 +52,18 @@ responsive while configuration I/O runs on Tokio's blocking pool.
 
 Native radio inspection uses bounded read-only iw commands. Fresh Start requests
 pass native configuration/channel/concurrency checks before backend dispatch;
-Stop cancels pending inspection. The backend still rechecks live state and owns
+Stop cancels pending inspection. [Rust band switching](native-band-switch.md)
+reconnects the upstream to a permitted channel without nmcli and without editing
+the saved profile; the [Wi-Fi radio watch](native-radio-watch.md) releases owned
+sharing when the kill switch is thrown. The backend still rechecks live state and owns
 profile validation, activation and recovery. See [native radio](native-radio.md).
+Native monitoring publishes `UserActionRequired({"type":"error"})` once per
+distinct backend failure, matching the pinned daemon's poll so the unchanged
+GNOME Shell client can notify the user; the message is the already-redacted
+status error and never includes credentials. Operations also broadcast their
+transitional `StatusChanged` (`connecting`/`stopping`) before the backend runs
+and refresh it after, exactly like the pinned dispatcher, so trays and settings
+windows update immediately instead of at the next poll.
 
 compat/worker.py loads the pinned engine without registering a public D-Bus
 object. The parent is its sole client. The original GLib operation scheduler
@@ -72,9 +87,12 @@ journals, recovery and automatic resume policy.
 ## Next extraction steps
 
 1. Completed: merged configuration schema, atomic persistence, secure new-file
-   credential creation, and differential validation. Existing factory-password
-   rotation and legacy interface-repair installer hooks are not implemented;
-   existing files are retained. See [native configuration](native-configuration.md).
+   credential creation, unambiguous-adapter detection and the package-upgrade
+   interface repair, plus differential validation. Both destructive installer
+   hooks are now explicit commands instead of package scripts, so an upgrade never
+   rewrites a customized file on its own. Factory-password rotation of an exact
+   template is intentionally absent: system mode requires an explicit
+   PASSPHRASE. See [native configuration](native-configuration.md).
 2. Completed: native interface enumeration, radio capability parsing and initial
    regulatory preflight. The pinned compatibility engine remains unchanged;
    native mode does not import its developer probe.

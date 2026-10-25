@@ -36,11 +36,13 @@ stale preflight completion from overwriting Stop. Status and clients remain
 available through Rust snapshots while inspections run. Configuration commits
 remain serialized with startup.
 
-The resulting Start plan is a validation result; Rust does not yet execute it.
-Python still rechecks live radio state before activation and owns upstream band
-switching, NetworkManager profile/sibling-interface checks, actual AP creation,
-firewall changes, journals, recovery and cleanup. An inspection is not an atomic
-kernel snapshot and cannot authorize later activation by itself. Inspection
+The resulting Start plan is a validation result that the native backends then
+execute: `create_ap` and NetworkManager modes freeze the planned band/channel,
+recheck live radio state and interface identity before activation, and own AP
+creation, firewall changes, journals, recovery and cleanup. Upstream band
+switching is a separate explicit operation ([band switch](native-band-switch.md));
+native startup still refuses to move the upstream itself. An inspection is not an
+atomic kernel snapshot and cannot authorize later activation by itself. Inspection
 failure can require Stop/cleanup before another startup attempt. `iw` remains an
 external nl80211 utility; this step does not introduce native netlink transport.
 

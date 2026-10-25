@@ -77,8 +77,9 @@ DHCP/DNS/NAT connectivity, throughput, sleep/resume or distribution installation
 No native service was deployed, installed or enabled. The laptop was still
 connected and its installed daemon remained running after the checks.
 
-Native mode is opt-in and requires BACKEND=networkmanager. Band switching is
-declined to preserve upstream. Automatic resume and seamless switching between
+Native mode is opt-in and requires BACKEND=networkmanager. Band switching is now
+performed by [Rust band switching](native-band-switch.md): it never runs while
+sharing is active and never edits the saved upstream profile. Automatic resume and seamless switching between
 native and compatibility service modes remain future work. create_ap supervision
 and the existing compatibility engine still use Python; native mode does not
 construct that worker. See the [native mode guide](native-networkmanager.md) for

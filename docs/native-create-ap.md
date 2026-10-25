@@ -28,8 +28,13 @@ physical hardware; activation remains a separate hardware gate.
 
 Rust freezes configuration into a random, mode-0600 file under the private
 `/run/relayforge` directory. Credentials appear only in that private file, never
-in argv, ownership JSON or returned helper diagnostics. Raw helper output is
-drained with a size limit and discarded. Rust writes a synced intent journal,
+in argv, ownership JSON or returned helper diagnostics. Helper output is retained
+as a bounded 16 KiB tail, redacted and published to the service journal on a
+failed startup; it is deliberately never placed in a D-Bus reply, because helper
+logs are untrusted. A helper that exceeds 1 MiB of output is still a fault.
+Owned hostapd processes whose instance directory cleanup already removed are
+reaped from `/proc` before a new instance starts and during recovery, so a crash
+in another instance cannot keep the adapter busy. Rust writes a synced intent journal,
 launches a gated child in a separate process group, records its PID, boot ID and
 kernel start time, then acknowledges execution through an anonymous pipe. A
 parent crash before acknowledgement cannot launch the networking helper. The Rust
@@ -37,7 +42,8 @@ instance runs in the foreground and retains the existing readiness acknowledgeme
 
 Readiness requires the exact PID acknowledgement, a live child with the expected
 executable and arguments, one owned recovery snapshot, the recorded AP interface
-identity and planned channel, and an unchanged upstream SSID/BSSID/frequency.
+identity, the observed channel (reported as the real band, never the planned one)
+and an unchanged upstream SSID/BSSID/frequency.
 Readiness has a deadline. Client reports combine iw station observations with
 leases from that instance's dnsmasq directory. Credentials and arbitrary helper
 output are never forwarded through desktop status errors.
@@ -98,7 +104,10 @@ files, enables services or reloads D-Bus.
 
 The systemd unit conflicts with both the compatibility service and native
 NetworkManager unit, preserves the private runtime across restarts, and allows
-bounded cleanup before shutdown. Installation still requires the backup,
+bounded cleanup before shutdown. Its `ExecStopPost` re-invokes the service with
+`--recover-all`, mirroring the pinned daemon's post-stop recovery so a crashed
+daemon never strands journal-owned resources ([recovery](native-recovery.md)).
+Installation still requires the backup,
 configuration validation and controlled activation/rollback steps described in
 [the native deployment guide](native-networkmanager.md). Do not remove a pending
 journal to bypass failed ownership checks. No service was installed or activated

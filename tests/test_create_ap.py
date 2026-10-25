@@ -9,7 +9,8 @@ import tempfile
 import threading
 import time
 import unittest
-from test_dbus import BINARY,ROOT,call,connect,decode_reply,running,wait_for,GLib,ServiceClient
+from test_dbus import (BINARY,ROOT,BUS_NAME,OBJECT_PATH,call,connect,decode_reply,running,
+                       wait_for,GLib,Gio,ServiceClient)
 from test_radio import capture
 
 
@@ -173,18 +174,34 @@ class CreateApTests(unittest.TestCase):
     def test_unexpected_helper_exit_upstream_change_and_channel_change_stop_sharing(self):
         for failure in ('process','upstream','channel'):
             with self.subTest(failure=failure),bench() as context,context.service() as (bus,_):
-                self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
-                if failure=='process':
-                    os.kill(context.record()['process']['pid'],signal.SIGKILL)
-                elif failure=='upstream':
-                    path=context.state/'live-radio.json'
-                    value=json.loads(path.read_text())
-                    value['link']=value['link'].replace('2412','2437')
-                    path.write_text(json.dumps(value))
-                else:
-                    context.update(bad_channel=True)
-                wait_for(lambda:decode_reply('GetStatus',call(bus,'GetStatus'))['state']=='failed',seconds=8)
-                context.clean(self)
+                observer=connect()
+                actions=[]
+                def action(_bus,_sender,_path,_interface,_name,parameters):
+                    actions.append(json.loads(parameters.unpack()[0]))
+                subscription=observer.signal_subscribe(BUS_NAME,BUS_NAME,'UserActionRequired',
+                                                       OBJECT_PATH,None,Gio.DBusSignalFlags.NONE,action)
+                try:
+                    self.assertTrue(decode_reply('Start',call(bus,'Start'))['success'])
+                    if failure=='process':
+                        os.kill(context.record()['process']['pid'],signal.SIGKILL)
+                    elif failure=='upstream':
+                        path=context.state/'live-radio.json'
+                        value=json.loads(path.read_text())
+                        value['link']=value['link'].replace('2412','2437')
+                        path.write_text(json.dumps(value))
+                    else:
+                        context.update(bad_channel=True)
+                    wait_for(lambda:decode_reply('GetStatus',call(bus,'GetStatus'))['state']=='failed',seconds=8)
+                    status=decode_reply('GetStatus',call(bus,'GetStatus'))
+                    # The unchanged GNOME Shell client is notified of a changed
+                    # backend error through its status-independent signal.
+                    wait_for(lambda:any(a.get('type')=='error' for a in actions),seconds=5)
+                    self.assertEqual([a for a in actions if a.get('type')=='error'][-1]['message'],status['error'])
+                    self.assertTrue(status['error'])
+                    context.clean(self)
+                finally:
+                    observer.signal_unsubscribe(subscription)
+                    observer.close_sync(None)
 
     def test_gate_without_durable_parent_ack_never_executes_helper(self):
         with bench() as context:

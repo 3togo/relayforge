@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=10
 Description=RelayForge native NetworkManager Wi-Fi sharing
 Requires=NetworkManager.service
 After=NetworkManager.service dbus.service
@@ -8,6 +10,9 @@ Conflicts=wifi-hotspot-daemon.service relayforge.service relayforge-create-ap.se
 Type=dbus
 BusName=io.github.erhanzeyrek.WifiHotspot
 ExecStart=/usr/lib/relayforge/relayforge-service --native-networkmanager
+# The pinned daemon recovers owned resources after every stop, including a
+# crash (nm_backend.py --recover-all). Recovery is journal-scoped and idempotent.
+ExecStopPost=/usr/lib/relayforge/relayforge-service --native-networkmanager --recover-all
 User=root
 RuntimeDirectory=relayforge
 RuntimeDirectoryMode=0700
@@ -16,6 +21,8 @@ UMask=0077
 TimeoutStopSec=75
 Restart=on-failure
 RestartSec=5
+# 17 is EXIT_MISSING_CONFIG in relayforge-service: never retry it.
+RestartPreventExitStatus=17
 NoNewPrivileges=yes
 ProtectHome=yes
 

@@ -33,12 +33,77 @@ const MARKER: &str = "io.github.relayforge.owner";
 // Downstream AP+STA extension advertised by the pinned backend, not a generic NM feature.
 const NATIVE_RELAY_CAPABILITY: u32 = 0x7001;
 const PARENT: &str = "org.freedesktop.NetworkManager.wifi-relay.parent";
-type Settings = HashMap<String, HashMap<String, OwnedValue>>;
-fn string(value: &str) -> OwnedValue {
+pub(crate) type Settings = HashMap<String, HashMap<String, OwnedValue>>;
+pub(crate) fn string(value: &str) -> OwnedValue {
     OwnedValue::from(Str::from(value.to_owned()))
 }
 fn strings(value: &str) -> OwnedValue {
     OwnedValue::try_from(Value::from(vec![value.to_owned()])).unwrap()
+}
+/// Neighbour states that prove an address was recently usable on this link.
+const ACTIVE_NEIGHBOR_STATES: [&str; 5] = ["REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT"];
+fn neighbor_states(value: &Json) -> Vec<String> {
+    match value.get("state") {
+        Some(Json::Array(items)) => items
+            .iter()
+            .filter_map(Json::as_str)
+            .map(str::to_uppercase)
+            .collect(),
+        Some(Json::String(text)) => text
+            .split_whitespace()
+            .map(str::to_uppercase)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+/// An IPv4 prefix on the shared interface, used to attribute neighbour addresses.
+struct Subnet {
+    base: u32,
+    mask: u32,
+}
+impl Subnet {
+    fn contains(&self, address: std::net::Ipv4Addr) -> bool {
+        u32::from(address) & self.mask == self.base
+    }
+}
+fn interface_subnets(text: &str) -> Result<Vec<Subnet>> {
+    let interfaces: Vec<Json> =
+        serde_json::from_str(text).map_err(|_| "Invalid address inspection")?;
+    let mut result = Vec::new();
+    for interface in interfaces {
+        let addresses = match interface.get("addr_info").and_then(Json::as_array) {
+            Some(addresses) => addresses,
+            None => continue,
+        };
+        for address in addresses {
+            if address.get("family").and_then(Json::as_str) != Some("inet") {
+                continue;
+            }
+            let (local, prefix) = match (
+                address.get("local").and_then(Json::as_str),
+                address.get("prefixlen").and_then(Json::as_u64),
+            ) {
+                (Some(local), Some(prefix)) => (local, prefix),
+                _ => continue,
+            };
+            let Ok(address) = local.parse::<std::net::Ipv4Addr>() else {
+                continue;
+            };
+            if prefix > 32 {
+                continue;
+            }
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            result.push(Subnet {
+                base: u32::from(address) & mask,
+                mask,
+            });
+        }
+    }
+    Ok(result)
 }
 fn field<'a>(settings: &'a Settings, section: &str, key: &str) -> Option<&'a str> {
     settings
@@ -91,7 +156,10 @@ fn profile(config: &Config, owned: &Owned, plan: &relayforge_core::radio::StartP
                 ("proto".into(), strings("rsn")),
                 ("pairwise".into(), strings("ccmp")),
                 ("group".into(), strings("ccmp")),
-                ("psk-flags".into(), 2u32.into()),
+                // No psk-flags: 0x2 is NM_SETTING_SECRET_FLAG_NOT_SAVED, which makes
+                // NetworkManager drop the supplied PSK and request it from an agent
+                // ("no secrets: No agents were available"), so the AP never activates.
+                // Persistence is already prevented by persist=volatile.
             ]),
         ),
         (
@@ -136,12 +204,12 @@ fn matches(settings: &Settings, owned: &Owned) -> bool {
         && field(settings, "802-11-wireless", "mode") == Some("ap")
         && tags.as_ref().and_then(|t| t.get(MARKER)) == Some(&owned.token)
 }
-struct Bus {
+pub(crate) struct Bus {
     connection: Connection,
     owner: String,
 }
 impl Bus {
-    async fn open(fixture: bool) -> Result<Self> {
+    pub(crate) async fn open(fixture: bool) -> Result<Self> {
         let builder = if fixture {
             zbus::connection::Builder::session()
         } else {
@@ -165,7 +233,7 @@ impl Bus {
         .to_string();
         Ok(Self { connection, owner })
     }
-    async fn call<R: DeserializeOwned + Type, B: Serialize + zbus::zvariant::DynamicType>(
+    pub(crate) async fn call<R: DeserializeOwned + Type, B: Serialize + zbus::zvariant::DynamicType>(
         &self,
         path: &str,
         interface: &str,
@@ -180,7 +248,7 @@ impl Bus {
             .map_err(|_| "NetworkManager request timed out")?
             .map_err(|_| "NetworkManager request failed")
     }
-    async fn property<T: TryFrom<OwnedValue>>(
+    pub(crate) async fn property<T: TryFrom<OwnedValue>>(
         &self,
         path: &str,
         interface: &str,
@@ -196,13 +264,13 @@ impl Bus {
             .await?;
         T::try_from(value).map_err(|_| "Invalid NetworkManager property type")
     }
-    async fn device(&self, iface: &str) -> Result<OwnedObjectPath> {
+    pub(crate) async fn device(&self, iface: &str) -> Result<OwnedObjectPath> {
         self.call(ROOT, NM, "GetDeviceByIpIface", &(iface,)).await
     }
-    async fn settings(&self, path: &str) -> Result<Settings> {
+    pub(crate) async fn settings(&self, path: &str) -> Result<Settings> {
         self.call(path, PROFILE, "GetSettings", &()).await
     }
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         let _ = timeout(Duration::from_secs(3), self.connection.close()).await;
     }
 }
@@ -237,7 +305,7 @@ impl Platform {
             .await?;
         serde_json::from_str(&text).map_err(|_| "Invalid simulated kernel reply")
     }
-    async fn inspect(&self, bus: &Bus, iface: &str) -> Result<Snapshot> {
+    pub(crate) async fn inspect(&self, bus: &Bus, iface: &str) -> Result<Snapshot> {
         if self.fixture {
             let capture: Capture = self.test(bus, "Radio", json!({"interface":iface})).await?;
             Snapshot::parse(&capture)
@@ -443,6 +511,16 @@ impl Platform {
         .await?;
         let neighbors: Vec<Json> =
             serde_json::from_str(&text).map_err(|_| "Invalid neighbor inspection")?;
+        // An address only counts as a lease when the neighbour entry is usable and
+        // falls inside the shared subnet; a stale global entry is not evidence.
+        let subnets = interface_subnets(
+            &radio::command(
+                ip,
+                &["-j", "-4", "address", "show", "dev", &owned.interface],
+                Duration::from_secs(3),
+            )
+            .await?,
+        )?;
         let clients: Vec<_> = macs
             .into_iter()
             .take(1024)
@@ -453,9 +531,19 @@ impl Platform {
                         n["lladdr"]
                             .as_str()
                             .is_some_and(|m| m.eq_ignore_ascii_case(&mac))
+                            && neighbor_states(n)
+                                .iter()
+                                .any(|state| ACTIVE_NEIGHBOR_STATES.contains(&state.as_str()))
                     })
                     .and_then(|n| n["dst"].as_str())
                     .filter(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
+                    .filter(|ip| {
+                        subnets.is_empty()
+                            || subnets.iter().any(|subnet| {
+                                ip.parse::<std::net::Ipv4Addr>()
+                                    .is_ok_and(|address| subnet.contains(address))
+                            })
+                    })
                     .unwrap_or("");
                 json!({"mac":mac,"ip":ip,"hostname":""})
             })
@@ -805,9 +893,17 @@ impl Backend {
         session.active = Some(active);
         loop {
             self.ensure_upstream(session).await?;
-            let state: u32 = bus
+            // A rejected activation removes the ActiveConnection, so a vanished object
+            // must read as an activation failure rather than an opaque transport error.
+            let state: u32 = match bus
                 .property(session.active.as_ref().unwrap().as_str(), ACTIVE, "State")
-                .await?;
+                .await
+            {
+                Ok(state) => state,
+                Err(_) => {
+                    return Err("Native NetworkManager activation was rejected; see the journal")
+                }
+            };
             if state == 2 {
                 break;
             }

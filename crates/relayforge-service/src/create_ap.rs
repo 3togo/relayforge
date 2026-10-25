@@ -301,6 +301,14 @@ impl Platform {
                 );
             }
         }
+        // A station without a DHCP lease (static addressing) still appears in the
+        // kernel neighbor table; the pinned daemon falls back to it for the IP and
+        // never claims a hostname that the lease file did not provide.
+        if let Some(arp) = arp_neighbors() {
+            for (mac, ip) in arp_addresses(&arp) {
+                addresses.entry(mac).or_insert((ip, String::new()));
+            }
+        }
         let mut clients = Vec::new();
         for mac in stations
             .lines()
@@ -320,6 +328,42 @@ impl Platform {
         }
         Ok((iface, frequency, json!(clients)))
     }
+}
+/// Bounded `/proc/net/arp` read; an unreadable table is not a client failure.
+fn arp_neighbors() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open("/proc/net/arp")
+        .ok()?
+        .take(64 * 1024)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+/// MAC→IPv4 map from the kernel neighbor table. Incomplete placeholders
+/// (`00:00:00:00:00:00`) and malformed rows are never addresses for a client.
+fn arp_addresses(text: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // <ip> <hw-type> <flags> <mac> <mask> <device>
+        if fields.len() < 6 {
+            continue;
+        }
+        let mac = fields[3].to_lowercase();
+        if mac == "00:00:00:00:00:00"
+            || mac.len() != 17
+            || !mac
+                .split(':')
+                .all(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            continue;
+        }
+        if fields[0].parse::<std::net::Ipv4Addr>().is_ok() {
+            map.insert(mac, fields[0].to_owned());
+        }
+    }
+    map
 }
 fn private_read(path: &Path, limit: usize, mode: u32) -> Result<Option<Vec<u8>>> {
     let file = match OpenOptions::new()
@@ -438,27 +482,80 @@ async fn run_helper(
     )
     .await
 }
-async fn discard(mut pipe: impl AsyncRead + Unpin) -> Result<()> {
-    let mut total = 0;
-    let mut buf = [0; 8192];
+/// Bounded tail of helper output, retained so a failed startup can explain itself.
+type Tail = Arc<std::sync::Mutex<Vec<u8>>>;
+const TAIL_LIMIT: usize = 16 * 1024;
+const TAIL_LINES: usize = 4;
+async fn capture(mut pipe: impl AsyncRead + Unpin, tail: Tail) -> Result<()> {
+    let mut buffer = [0u8; 8192];
+    let mut total = 0usize;
     loop {
         let count = pipe
-            .read(&mut buf)
+            .read(&mut buffer)
             .await
-            .map_err(|_| "Cannot drain helper output")?;
+            .map_err(|_| "Cannot read helper output")?;
         if count == 0 {
             return Ok(());
         }
         total += count;
+        let mut guard = tail.lock().unwrap_or_else(|error| error.into_inner());
+        guard.extend_from_slice(&buffer[..count]);
+        if guard.len() > TAIL_LIMIT {
+            let excess = guard.len() - TAIL_LIMIT;
+            guard.drain(..excess);
+        }
+        // The tail is bounded, but a helper that never stops writing is still a fault.
         if total > 1024 * 1024 {
             return Err("create_ap output exceeds limit");
         }
     }
 }
+/// Credentials never reach a D-Bus reply, so any stored secret is masked first.
+fn redact(text: &str, secret: &str) -> String {
+    if secret.len() < 4 {
+        return text.to_owned();
+    }
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find(secret) {
+        result.push_str(&rest[..index]);
+        result.push_str("[redacted]");
+        rest = &rest[index + secret.len()..];
+    }
+    result.push_str(rest);
+    result
+}
+/// Publish the helper's own explanation to the service journal, never to a reply.
+///
+/// Helper output is untrusted: create_ap and hostapd logs can echo configuration.
+/// Credentials never travel over the bus, so the tail is redacted and written to
+/// stderr, where an operator can read it without exposing it to every desktop client.
+pub(crate) fn report_startup_log(tail: &Tail, config: &Config) -> bool {
+    let Ok(bytes) = tail.lock() else {
+        return false;
+    };
+    let secret = config.get("PASSPHRASE").map(String::as_str).unwrap_or("");
+    let text = redact(&String::from_utf8_lossy(&bytes), secret);
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let start = lines.len().saturating_sub(TAIL_LINES);
+    eprintln!(
+        "create_ap startup diagnostics: {}",
+        lines[start..].join(" \n")
+    );
+    true
+}
 struct Session {
     owned: Owned,
     child: Child,
     output: Vec<JoinHandle<Result<()>>>,
+    log: Tail,
     status: Status,
     baseline: (String, String, u32),
     frequency: u32,
@@ -596,6 +693,14 @@ impl Backend {
         }
         Ok(())
     }
+    /// Release hostapd processes whose instance directory cleanup already removed.
+    async fn reap_orphans(&self) -> Result<()> {
+        if self.platform.fixture {
+            return Ok(());
+        }
+        crate::stale::reap(&self.platform.engine()).await?;
+        Ok(())
+    }
     async fn recover_owned(&self, owned: &Owned) -> Result<()> {
         crate::ap_runtime::finish_instance_cleanup(
             &owned.pidfile(&self.platform.runtime),
@@ -632,6 +737,7 @@ impl Backend {
         journal.clear()
     }
     pub async fn recover(&self) -> Result<()> {
+        self.reap_orphans().await?;
         let owned = self.journal.lock().await.load()?;
         if let Some(owned) = owned {
             self.stop_process(&owned, None).await?;
@@ -679,12 +785,17 @@ impl Backend {
             return Err("create_ap lacks one owned resource snapshot");
         }
         let (iface, frequency, clients) = self.platform.observe(&session.owned, &dirs[0]).await?;
-        if relayforge_core::validate_reply(relayforge_core::Method::GetClients, &clients).is_err()
-            || frequency != session.frequency
-        {
-            return Err("Invalid create_ap observation or channel changed");
+        if relayforge_core::validate_reply(relayforge_core::Method::GetClients, &clients).is_err() {
+            return Err("Invalid create_ap client observation");
         }
         let snapshot = self.platform.radio(&session.owned.parent).await?;
+        // Report the band the AP actually broadcasts, never the one that was planned.
+        // The frozen radio plan still wins: a hostapd fallback is a fault, because the
+        // upstream station would be left on a different channel than the AP.
+        let observed = relayforge_core::radio::band(frequency);
+        if observed.is_empty() || frequency != session.frequency {
+            return Err("Owned AP is not broadcasting on the permitted hotspot channel");
+        }
         let caps = snapshot.capabilities;
         if (
             caps.current_sta_ssid,
@@ -696,6 +807,7 @@ impl Backend {
             return Err("Upstream Wi-Fi changed; sharing must stop");
         }
         session.status.iface = iface;
+        session.status.band = observed.into();
         session.status.client_count = clients.as_array().unwrap().len() as u32;
         Ok(clients)
     }
@@ -717,6 +829,10 @@ impl Backend {
             };
         }
         if let Err(error) = self.recover().await {
+            return json!({"success":false,"error":error});
+        }
+        // A previous crash must not leave a hostapd process holding this adapter.
+        if let Err(error) = self.reap_orphans().await {
             return json!({"success":false,"error":error});
         }
         let gate_cancelled = cancelled.clone();
@@ -797,9 +913,16 @@ impl Backend {
                 .map_err(|_| "Cannot start gated create_ap child")?;
             owned.process = Some(Birth::capture(child.id().ok_or("Missing helper PID")?)?);
             self.journal.lock().await.write(&owned)?;
+            let log: Tail = Arc::new(std::sync::Mutex::new(Vec::new()));
             let output = vec![
-                tokio::spawn(discard(child.stdout.take().unwrap())),
-                tokio::spawn(discard(child.stderr.take().unwrap())),
+                tokio::spawn(capture(
+                    child.stdout.take().unwrap(),
+                    Arc::clone(&log),
+                )),
+                tokio::spawn(capture(
+                    child.stderr.take().unwrap(),
+                    Arc::clone(&log),
+                )),
             ];
             let status = Status {
                 backend: "create_ap".into(),
@@ -814,6 +937,7 @@ impl Backend {
                 owned,
                 child,
                 output,
+                log,
                 status,
                 baseline,
                 frequency,
@@ -859,6 +983,15 @@ impl Backend {
         match result {
             Ok(()) => json!({"success":true,"status":slot.as_ref().unwrap().status}),
             Err(error) => {
+                // Publish the helper's explanation before cleanup aborts its capture.
+                let reported = slot
+                    .as_ref()
+                    .is_some_and(|session| report_startup_log(&session.log, config));
+                let error = if reported {
+                    format!("{error}; see the service journal for create_ap diagnostics")
+                } else {
+                    error.to_string()
+                };
                 let cleanup = if let Some(session) = slot.as_mut() {
                     self.cleanup(session).await
                 } else {
@@ -872,7 +1005,7 @@ impl Backend {
                     session.status.error =
                         Some("create_ap cleanup unconfirmed; Stop must retry".into());
                 }
-                json!({"success":false,"error":if cleanup.is_ok() {error} else {"create_ap startup failed; cleanup unconfirmed and journal retained"}})
+                json!({"success":false,"error":if cleanup.is_ok() {error} else {"create_ap startup failed; cleanup unconfirmed and journal retained".to_string()}})
             }
         }
     }
@@ -928,5 +1061,50 @@ impl Backend {
                 Some((status, json!([])))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ARP: &str = "IP address       HW type     Flags       HW address            Mask     Device\n\
+192.168.12.23    0x1         0x2         aa:bb:cc:dd:ee:01     *        apfake0\n\
+192.168.12.24    0x1         0x0         00:00:00:00:00:00     *        apfake0\n\
+10.0.0.7         0x1         0x2         AA:BB:CC:DD:EE:02     *        eth0\n\
+not-an-ip        0x1         0x2         aa:bb:cc:dd:ee:03     *        apfake0\n\
+192.168.12.25    0x1         0x2         garbage               *        apfake0\n\
+192.168.12.26    0x1         0x2\n";
+
+    #[test]
+    fn neighbor_table_supplies_only_real_completed_addresses() {
+        let map = arp_addresses(ARP);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["aa:bb:cc:dd:ee:01"], "192.168.12.23");
+        assert_eq!(map["aa:bb:cc:dd:ee:02"], "10.0.0.7");
+    }
+
+    #[test]
+    fn missing_or_partial_neighbor_tables_add_nothing() {
+        assert!(arp_addresses("").is_empty());
+        assert!(arp_addresses(ARP.lines().next().unwrap()).is_empty());
+        assert!(arp_addresses("junk without columns\nmore junk\n").is_empty());
+    }
+
+    /// A client with a lease keeps its DHCP identity over a stale ARP entry.
+    #[test]
+    fn lease_addresses_win_over_neighbor_fallback() {
+        let mut addresses = BTreeMap::from([(
+            "aa:bb:cc:dd:ee:01".to_owned(),
+            ("192.168.12.10".to_owned(), "printer".to_owned()),
+        )]);
+        for (mac, ip) in arp_addresses(ARP) {
+            addresses.entry(mac).or_insert((ip, String::new()));
+        }
+        assert_eq!(
+            addresses["aa:bb:cc:dd:ee:01"],
+            ("192.168.12.10".to_owned(), "printer".to_owned())
+        );
+        assert_eq!(addresses["aa:bb:cc:dd:ee:02"], ("10.0.0.7".to_owned(), String::new()));
     }
 }

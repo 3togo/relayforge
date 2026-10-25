@@ -71,8 +71,9 @@ def build(args):
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     package = output / f'relayforge_{version.replace(":", "%3a")}_{arch}.deb'
-    if package.exists():
-        raise FileExistsError(f'Refusing to overwrite {package}')
+    if package.exists() and not args.force:
+        raise FileExistsError(
+            f'Refusing to overwrite {package} (pass --force to replace it)')
     with tempfile.TemporaryDirectory(prefix='relayforge-deb-') as temporary:
         work = Path(temporary)
         payload = work / 'debian/relayforge'
@@ -90,8 +91,12 @@ def build(args):
         for source in (ROOT / 'vendor/wifi-relay/packaging/licenses').iterdir():
             if source.is_file():
                 copy(payload, doc + 'licenses/' + source.name, source)
+        # The GNOME Shell extension is not part of this package, so the helper that
+        # enables it at first login is never shipped; it could only ever no-op.
+        excluded = {'enable-extension.py'}
         for source in (ROOT / 'vendor/wifi-relay/settings').rglob('*'):
-            if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
+            if (source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc'
+                    and source.name not in excluded):
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
         # Keep the imported snapshot intact; ship RelayForge's maintained tray.
         copy(payload, 'usr/lib/relayforge/settings/tray.py', ROOT / 'desktop/tray.py')
@@ -134,10 +139,23 @@ def build(args):
                 path.chmod(0o755)
         built = work / 'relayforge.deb'
         run('dpkg-deb', '--root-owner-group', '--build', str(payload), str(built))
-        # Exclusive creation also protects against another build finishing first.
-        with package.open('xb') as destination, built.open('rb') as source:
-            shutil.copyfileobj(source, destination)
-        package.chmod(0o644)
+        if args.force and package.exists():
+            # Replace atomically so an interrupted run never leaves a partial package.
+            handle, temporary = tempfile.mkstemp(dir=package.parent, prefix='.relayforge-',
+                                                suffix='.deb')
+            os.close(handle)
+            try:
+                shutil.copyfile(built, temporary)
+                os.chmod(temporary, 0o644)
+                os.replace(temporary, package)
+            except BaseException:
+                Path(temporary).unlink(missing_ok=True)
+                raise
+        else:
+            # Exclusive creation also protects against another build finishing first.
+            with package.open('xb') as destination, built.open('rb') as source:
+                shutil.copyfileobj(source, destination)
+            package.chmod(0o644)
     print(package)
 
 
@@ -147,6 +165,8 @@ def main():
     parser.add_argument('--backend', choices=('networkmanager', 'create_ap'), default='networkmanager')
     parser.add_argument('--version', help='Debian version (default: workspace version)')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'artifacts/deb')
+    parser.add_argument('--force', action='store_true',
+                        help='Replace an existing package of the same name atomically')
     args = parser.parse_args()
     try:
         build(args)

@@ -55,6 +55,65 @@ class DebPackagingTests(unittest.TestCase):
                               (payload / 'DEBIAN/conffiles').read_text().splitlines())
                 self.assertFalse((payload / 'etc/wifi-hotspot.conf').exists())
                 self.assertFalse((payload / 'DEBIAN/postinst').exists())
+                # The packaged settings must not ship a helper for an extension that
+                # this package does not install.
+                shipped = {path.name for path in (payload / 'usr/lib/relayforge/settings').rglob('*')
+                           if path.is_file()}
+                self.assertNotIn('enable-extension.py', shipped)
+                self.assertIn('launcher.py', shipped)
+                self.assertIn('tray.py', shipped)
+                # A fresh install has no /etc/wifi-hotspot.conf. The service exits with
+                # a dedicated status that the unit must never restart, so a desktop
+                # client polling GetStatus cannot re-trigger activation forever.
+                unit = (payload / 'usr/lib/systemd/system'
+                        / ('relayforge-native.service' if backend == 'networkmanager'
+                           else 'relayforge-create-ap.service')).read_text()
+                self.assertIn('RestartPreventExitStatus=17', unit)
+                # Owned resources are recovered after every stop, including a crash.
+                self.assertIn('ExecStopPost=', unit)
+                self.assertIn('--recover-all', unit)
+                # RestartSec must stay inside the rate-limit window or the limit never trips.
+                interval = int(unit.split('StartLimitIntervalSec=')[1].split()[0])
+                self.assertGreaterEqual(interval, 60)
+                self.assertIn('StartLimitBurst=', unit)
+                # The package ships its own Polkit action so the desktop controls do
+                # not prompt; remote and inactive sessions must still be denied.
+                policy = (payload / 'usr/share/polkit-1/actions'
+                          / 'io.github.erhanzeyrek.WifiHotspot.policy').read_text()
+                manage = policy.split('.manage')[1].split('</action>')[0]
+                credentials = policy.split('.credentials')[1].split('</action>')[0]
+                # Start/Stop stay prompt-free for the active session.
+                self.assertIn('<allow_active>yes</allow_active>', manage)
+                # Reading or rewriting the password requires authenticating first.
+                self.assertIn('<allow_active>auth_self_keep</allow_active>', credentials)
+                for action in (manage, credentials):
+                    self.assertIn('<allow_any>no</allow_any>', action)
+                    self.assertIn('<allow_inactive>no</allow_inactive>', action)
+
+
+    def test_existing_package_is_preserved_unless_force_is_given(self):
+        binary = Path(shutil.which('dash') or shutil.which('true')).resolve()
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            command = ['python3', str(ROOT / 'tools/build-deb.py'), '--binary', str(binary),
+                       '--version', '0.0.0~test', '--output-dir', str(work)]
+            subprocess.run(command, check=True, capture_output=True)
+            package = next(work.glob('*.deb'))
+            original = package.read_bytes()
+            refused = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('Refusing to overwrite', refused.stderr)
+            self.assertEqual(package.read_bytes(), original)
+            inode = package.stat().st_ino
+            forced = subprocess.run([*command, '--force'], capture_output=True, text=True)
+            self.assertEqual(forced.returncode, 0, forced.stderr)
+            # Renamed into place: a new inode, and still a valid package.
+            self.assertNotEqual(package.stat().st_ino, inode)
+            self.assertEqual(
+                subprocess.check_output(['dpkg-deb', '--field', str(package), 'Package'],
+                                        text=True).strip(), 'relayforge')
+            # A forced replacement is renamed into place, never left half-written.
+            self.assertEqual([p.name for p in work.iterdir() if p.name.startswith('.relayforge-')], [])
 
 
 if __name__ == '__main__':
