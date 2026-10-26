@@ -1,2 +1,2 @@
-# Preserve the pinned upstream snapshot byte-for-byte, including its whitespace.
-vendor/wifi-relay/** -whitespace
+# Unified patches contain required context prefixes and upstream indentation.
+integration/**/*.patch -whitespace

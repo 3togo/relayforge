@@ -218,69 +218,101 @@ class HotspotTray(Gtk.Application):
         description = 'Wi-Fi Relay: ' + label
         if reason:
             description += ': ' + reason
-        self.indicator.set_icon_full('wifi-hotspot-' + state, description)
-        menu = Gtk.Menu()
-        status_item = Gtk.MenuItem(label='Wi-Fi Relay: ' + label)
-        status_item.set_sensitive(False)
-        menu.append(status_item)
-        switch = Gtk.CheckMenuItem(label='Enable hotspot')
-        switch.set_active(requested)
-        switch.set_sensitive(not self.busy and not stopping and
-                             (self.status.get('state') != 'connecting' or requested) and not unavailable)
-        if not switch.get_sensitive():
-            switch.set_tooltip_text('Wait for the current hotspot operation to finish.' if transition
-                                    else 'The hotspot service is unavailable. Open Hotspot Settings for details.')
-        switch.connect('toggled', self._toggle)
-        menu.append(switch)
-        if unavailable:
-            self._explanation_row(menu, 'Hotspot service unavailable. Open Hotspot Settings to check the service.')
-        if reason:
-            self._explanation_row(menu, reason)
-            if CHANNEL_ERROR in reason:
-                self._explanation_row(menu, CHANNEL_ADVICE)
-        elif transition:
-            self._explanation_row(menu, 'Stopping hotspot…' if stopping else 'Starting hotspot; waiting for Wi-Fi…')
-        if active:
-            for text in ['SSID: ' + self.status.get('ssid', 'Hotspot'),
-                         f"Connected devices: {self.status.get('client_count', len(self.clients))}"]:
-                row = Gtk.MenuItem(label=text)
+        icon = ('wifi-hotspot-' + state, description)
+        if getattr(self, '_rendered_icon', None) != icon:
+            self.indicator.set_icon_full(*icon)
+            self._rendered_icon = icon
+        if not hasattr(self, 'menu'):
+            self._create_menu()
+        self.status_item.set_label('Wi-Fi Relay: ' + label)
+        # A service update is not a user request. Keep the handler blocked while
+        # synchronizing the checkbox, including when the exported menu is open.
+        self.switch.handler_block(self.switch_handler)
+        try:
+            self.switch.set_active(requested)
+        finally:
+            self.switch.handler_unblock(self.switch_handler)
+        self.switch.set_sensitive(not self.busy and not stopping and
+                                  (self.status.get('state') != 'connecting' or requested) and not unavailable)
+        self.switch.set_tooltip_text(None if self.switch.get_sensitive() else
+                                    'Wait for the current hotspot operation to finish.' if transition else
+                                    'The hotspot service is unavailable. Open Hotspot Settings for details.')
+        explanations = {
+            'unavailable': 'Hotspot service unavailable. Open Hotspot Settings to check the service.' if unavailable else '',
+            'reason': reason or '',
+            'channel': CHANNEL_ADVICE if reason and CHANNEL_ERROR in reason else '',
+            'transition': ('Stopping hotspot…' if stopping else 'Starting hotspot; waiting for Wi-Fi…')
+                          if transition and not reason else '',
+        }
+        for key, text in explanations.items():
+            row = self.explanation_rows[key]
+            row.get_child().set_text(text)
+            row.set_visible(bool(text))
+        self.ssid_item.set_label('SSID: ' + self.status.get('ssid', 'Hotspot'))
+        self.ssid_item.set_visible(active)
+        self.count_item.set_label(f"Connected devices: {self.status.get('client_count', len(self.clients))}")
+        self.count_item.set_visible(active)
+        clients = self.clients if active else []
+        # Keep existing client widgets too; only changed membership needs layout
+        # updates. The root menu and action rows must never be replaced by polls.
+        while len(self.client_rows) > len(clients):
+            self.client_rows.pop().destroy()
+        for index, client in enumerate(clients):
+            if index == len(self.client_rows):
+                row = Gtk.MenuItem()
                 row.set_sensitive(False)
-                menu.append(row)
-            for client in self.clients:
-                text = client.get('hostname') or 'Device'
-                if client.get('ip'):
-                    text += f" ({client['ip']})"
-                row = Gtk.MenuItem(label=text)
-                row.set_sensitive(False)
-                menu.append(row)
-        menu.append(Gtk.SeparatorMenuItem())
+                position = self.menu.get_children().index(self.client_separator)
+                self.menu.insert(row, position)
+                self.client_rows.append(row)
+            text = client.get('hostname') or 'Device'
+            if client.get('ip'):
+                text += f" ({client['ip']})"
+            self.client_rows[index].set_label(text)
+            self.client_rows[index].show()
+        self.quit_item.set_sensitive(not self.busy and self.proxy is not None)
+
+    def _create_menu(self):
+        # AppIndicator exports this menu to the panel. Replacing it dismisses
+        # the panel's popup, so install it once for the lifetime of the tray.
+        self.menu = Gtk.Menu()
+        self.status_item = Gtk.MenuItem()
+        self.status_item.set_sensitive(False)
+        self.menu.append(self.status_item)
+        self.switch = Gtk.CheckMenuItem(label='Enable hotspot')
+        self.switch_handler = self.switch.connect('toggled', self._toggle)
+        self.menu.append(self.switch)
+        self.explanation_rows = {}
+        for key in ('unavailable', 'reason', 'channel', 'transition'):
+            row = Gtk.MenuItem()
+            label = Gtk.Label()
+            label.set_xalign(0)
+            label.set_line_wrap(True)
+            label.set_max_width_chars(52)
+            row.add(label)
+            row.connect('activate', lambda item: self._error(item.get_child().get_text()))
+            self.menu.append(row)
+            self.explanation_rows[key] = row
+        self.ssid_item = Gtk.MenuItem()
+        self.count_item = Gtk.MenuItem()
+        for row in (self.ssid_item, self.count_item):
+            row.set_sensitive(False)
+            self.menu.append(row)
+        self.client_rows = []
+        self.client_separator = Gtk.SeparatorMenuItem()
+        self.menu.append(self.client_separator)
         settings = Gtk.MenuItem(label='Hotspot Settings')
         settings.connect('activate', self._open_settings)
-        menu.append(settings)
+        self.menu.append(settings)
         about = Gtk.MenuItem(label='About')
         about.connect('activate', self._open_about)
-        menu.append(about)
-        menu.append(Gtk.SeparatorMenuItem())
-        quit_item = Gtk.MenuItem(label='Quit')
-        quit_item.set_tooltip_text('Stop the hotspot and close the tray')
-        quit_item.set_sensitive(not self.busy and self.proxy is not None)
-        quit_item.connect('activate', self._quit_hotspot)
-        menu.append(quit_item)
-        menu.show_all()
-        self.menu = menu
-        self.indicator.set_menu(menu)
-
-    def _explanation_row(self, menu, text):
-        # Wrapped, enabled rows remain readable in panel menus and can reopen
-        # the explanation after a failure popup has been dismissed.
-        row = Gtk.MenuItem()
-        label = Gtk.Label(label=text)
-        label.set_xalign(0)
-        label.set_line_wrap(True)
-        label.set_max_width_chars(52)
-        row.add(label)
-        row.connect('activate', lambda _item: self._error(text))
-        menu.append(row)
+        self.menu.append(about)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        self.quit_item = Gtk.MenuItem(label='Quit')
+        self.quit_item.set_tooltip_text('Stop the hotspot and close the tray')
+        self.quit_item.connect('activate', self._quit_hotspot)
+        self.menu.append(self.quit_item)
+        self.menu.show_all()
+        self.indicator.set_menu(self.menu)
 
     def _toggle(self, _item):
         if (self.busy or not self.proxy or self.status.get('state') == 'stopping' or

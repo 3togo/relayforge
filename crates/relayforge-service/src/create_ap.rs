@@ -1005,7 +1005,10 @@ impl Backend {
                     session.status.error =
                         Some("create_ap cleanup unconfirmed; Stop must retry".into());
                 }
-                json!({"success":false,"error":if cleanup.is_ok() {error} else {"create_ap startup failed; cleanup unconfirmed and journal retained".to_string()}})
+                // A failed cleanup must not erase the reason the start failed. The
+                // operator needs the original fault as well as the retained journal;
+                // reporting only the cleanup state hides the defect that triggered it.
+                json!({"success":false,"error":if cleanup.is_ok() {error} else {format!("{error} (cleanup unconfirmed; journal retained)")}})
             }
         }
     }

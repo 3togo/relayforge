@@ -1,10 +1,13 @@
 """Check the installable tray/login contract without installing a package."""
 import configparser
+import argparse
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +17,35 @@ ROOT = Path(__file__).resolve().parents[1]
                          ('dpkg', 'dpkg-deb', 'dpkg-shlibdeps')),
                      'Debian packaging tools are required')
 class DebPackagingTests(unittest.TestCase):
+    def test_integrated_package_requires_matching_desktop_packages(self):
+        spec = importlib.util.spec_from_file_location('desktop_deb_builder', ROOT / 'tools/build-deb.py')
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        original_run = builder.run
+        builds = []
+
+        def run(*args, **kwargs):
+            # The actual desktop source builds are exercised separately; this
+            # test checks archive assembly and its installation dependency contract.
+            if args[0] == 'bash':
+                builds.append((args, kwargs))
+                return
+            return original_run(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary, patch.object(builder, 'run', run):
+            output = Path(temporary)
+            builder.build(argparse.Namespace(
+                version='0.0.0~test', binary=Path(shutil.which('dash') or shutil.which('true')),
+                backend='create_ap', output_dir=output, force=False, desktop_integrations='both'))
+            package = next(output.glob('*.deb'))
+            depends = subprocess.check_output(['dpkg-deb', '--field', str(package), 'Depends'], text=True)
+            self.assertIn('network-manager-applet (= 1.36.0-4ubuntu1+relayforge1)', depends)
+            self.assertIn('gnome-control-center (= 1:51.0-1ubuntu1+relayforge1)', depends)
+            self.assertEqual([Path(args[1]).parent.name for args, _ in builds],
+                             ['nm-applet', 'gnome-settings'])
+            for _, kwargs in builds:
+                self.assertEqual(kwargs['env']['RELAYFORGE_INTEGRATION_OUTPUT'], str(output))
+
     def test_tray_launchers_dependencies_and_login_configuration(self):
         # dash is small even on systems where true is a large multicall binary.
         # Exercise archive assembly without a Rust build.
@@ -44,6 +76,9 @@ class DebPackagingTests(unittest.TestCase):
                 subprocess.run(['sh', '-n', str(dispatcher)], check=True)
                 self.assertEqual((payload / 'usr/lib/relayforge/settings/tray.py').read_bytes(),
                                  (ROOT / 'desktop/tray.py').read_bytes())
+                for name in ('main.py', 'device_info.py', 'adapter_limits.py'):
+                    self.assertEqual((payload / 'usr/lib/relayforge/settings' / name).read_bytes(),
+                                     (ROOT / 'desktop' / name).read_bytes())
                 for name, executable in (
                     ('usr/share/applications/relayforge-tray.desktop', 'wifi-hotspot-tray --show-icon'),
                     ('etc/xdg/autostart/relayforge-tray.desktop', 'wifi-hotspot-enable-extension'),

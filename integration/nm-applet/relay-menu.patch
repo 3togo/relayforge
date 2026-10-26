@@ -1,0 +1,70 @@
+--- a/src/applet.c
++++ b/src/applet.c
+@@ -23,6 +23,7 @@
+ #include <stdlib.h>
+ 
+ #include "applet.h"
++#include "wifi-relay.h"
+ #include "applet-device-bt.h"
+ #include "applet-device-ethernet.h"
+ #include "applet-device-wifi.h"
+@@ -1636,6 +1637,7 @@
+ 		nma_menu_add_separator_item (menu);
+ 	}
+ 	nma_menu_add_vpn_submenu (menu, applet);
++	wifi_relay_add_menu (applet->wifi_relay, menu);
+ 
+ 	if (!INDICATOR_ENABLED (applet))
+ 		gtk_widget_show_all (menu);
+@@ -3531,6 +3533,7 @@
+ 	if (with_agent)
+ 		register_agent (applet);
+ 
++	applet->wifi_relay = wifi_relay_new (G_CALLBACK (applet_schedule_update_menu), applet);
+ 	g_application_hold (G_APPLICATION (applet));
+ }
+ 
+@@ -3538,6 +3541,7 @@
+ {
+ 	NMApplet *applet = NM_APPLET (object);
+ 
++	wifi_relay_free (applet->wifi_relay);
+ 	g_slice_free (NMADeviceClass, applet->ethernet_class);
+ 	g_slice_free (NMADeviceClass, applet->wifi_class);
+ #if WITH_WWAN
+--- a/src/applet.h
++++ b/src/applet.h
+@@ -26,6 +26,7 @@
+ #include <NetworkManager.h>
+ 
+ #include "applet-agent.h"
++#include "wifi-relay.h"
+ 
+ #if WITH_WWAN
+ #include <libmm-glib.h>
+@@ -117,6 +118,7 @@
+ 	AppIndicator *  app_indicator;
+ 	bool            app_indicator_show_signal_received;
+ #endif
++	WifiRelay *     wifi_relay;
+ 	guint           update_menu_id;
+ 
+ 	GtkStatusIcon * status_icon;
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -9,6 +9,7 @@
+   'ap-menu-item.c',
+   'applet-agent.c',
+   'applet.c',
++  'wifi-relay.c',
+   'applet-device-bt.c',
+   'applet-device-ethernet.c',
+   'applet-device-wifi.c',
+@@ -44,6 +45,7 @@
+ ]
+ 
+ deps = [
++  dependency('jansson', version: '>= 2.7'),
+   gtk_dep,
+   libnm_dep,
+   libnma_dep,

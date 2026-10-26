@@ -415,7 +415,7 @@ impl Kernel<'_> {
             interface_name(&name)?;
             flags.insert(
                 name.clone(),
-                (self.p.interface(&name)?, self.read_flag(&name)?),
+                (self.p.link_interface(&name)?, self.read_flag(&name)?),
             );
             if flags.len() > 128 {
                 return Err("Too many forwarding interfaces");
@@ -682,9 +682,14 @@ async fn remove(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<()> {
                 Err("Physical AP has no native restoration journal")
             };
         }
+        // A virtual AP that RelayForge created itself can legitimately be observed in a
+        // type other than AP: setup can fail before the type is ever changed, a partial
+        // restoration converts it back to managed, and a third party can flip it.
+        // Ownership is proven by the journal's WIFI_IFACE/VWIFI_IFACE pair plus the
+        // unchanged identity, not by the device's current type — refusing to remove it
+        // would leak our own interface and deadlock every later cleanup.
         if iface != &data.fields["VWIFI_IFACE"]
             || data.interfaces.get(iface) != Some(&current.identity)
-            || current.kind != "AP"
             || current.connected
         {
             return Err("Unjournalled AP identity changed");
@@ -792,7 +797,7 @@ impl Forwarding {
                 if id.ifindex == 0 {
                     return Err("Invalid forwarding interface index");
                 }
-                valid_mac(&id.mac)?;
+                valid_link_address(&id.mac)?;
             } else if !["all", "default"].contains(&name.as_str()) {
                 return Err("Missing forwarding interface identity");
             }

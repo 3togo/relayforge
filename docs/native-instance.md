@@ -62,9 +62,12 @@ recovery evidence. `--recover` refuses a live owner and never adopts bare PIDs.
 Housekeeping first checks every instance entry against known names and regular
 file/owner/link/permission/size rules. It verifies the retained directory's
 device/inode and each file's device/inode/content before deletion. Symlinks,
-hardlinks, unknown files, replaced directories and occupied hostapd control
-directories block removal. Only an empty, owner-matched hostapd control directory
-can be removed. Any existing service PID/readiness markers must still contain the exact
+hardlinks, unknown files and replaced directories block removal. After confirming
+all recorded daemons have exited, cleanup may retire the exact AP's leftover Unix
+datagram control socket: it must be owner-matched, single-linked, unchanged during
+inspection and refuse a connection. Live sockets, unexpected names, symlinks and
+regular files are retained. Only the resulting empty, owner-matched control
+directory can be removed. Any existing service PID/readiness markers must still contain the exact
 recorded owner's PID. No recursive directory deletion or orphan sweep runs.
 
 After resource verification, Rust persists a mode-0600 completion record in the

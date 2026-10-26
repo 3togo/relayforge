@@ -10,6 +10,7 @@ root=Path(sys.argv[1]);state_path=root/'network-state.json'
 NM='org.freedesktop.NetworkManager';BASE='/org/freedesktop/NetworkManager'
 bus=Gio.DBusConnection.new_for_address_sync(os.environ['DBUS_SESSION_BUS_ADDRESS'],Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT|Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,None,None)
 registered=set();handles=[]
+initializing=set();explicitly_managed=set()
 properties=Gio.DBusNodeInfo.new_for_xml('''<node><interface name="org.freedesktop.DBus.Properties"><method name="Get"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="out"/></method><method name="Set"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/></method></interface></node>''').interfaces[0]
 
 def dispatch(_bus,_sender,path,interface,method,params,reply):
@@ -19,6 +20,15 @@ def dispatch(_bus,_sender,path,interface,method,params,reply):
             if control.get('fail_query'): raise ValueError('query denied')
             if control.get('hang_query'):
                 GLib.timeout_add(5000,lambda:(reply.return_dbus_error(NM+'.Failed','Delayed query'),False)[1]);return
+            if control.get('initializing_virtual'):
+                # A new NM device is initially unmanaged while being discovered.
+                # Only an explicit Managed=false request prevents auto-management.
+                for name,dev in devices.items():
+                    if not name.startswith('rfap') or name in explicitly_managed: continue
+                    ready=name in initializing
+                    dev.update(managed=ready,state=30 if ready else 10)
+                    initializing.add(name)
+                temporary=root/'network-state.dbus-new';temporary.write_text(json.dumps(data));temporary.chmod(0o600);temporary.replace(state_path)
             for v in devices.values():
                 if v['path'] not in registered:
                     handles.append(bus.register_object(v['path'],properties,dispatch,None,None));registered.add(v['path'])
@@ -32,6 +42,7 @@ def dispatch(_bus,_sender,path,interface,method,params,reply):
             reply.return_value(GLib.Variant('(v)',(values[args[1]],)));return
         if method!='Set' or args[1]!='Managed' or name=='demo0' or control.get('deny_set'): raise ValueError('set denied')
         dev['managed']=args[2];dev['state']=30 if args[2] else 10
+        explicitly_managed.add(name)
         data.setdefault('calls',[]).append(['D-Bus',name,'Managed',str(args[2]).lower()])
         temporary=root/'network-state.dbus-new';temporary.write_text(json.dumps(data));temporary.chmod(0o600);temporary.replace(state_path)
         if control.get('lose_set'): raise ValueError('reply lost after committing')

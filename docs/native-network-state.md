@@ -53,6 +53,12 @@ installation. Do not discard pending journals to force migration. Changed values
 that conflict with the recorded transaction fail closed; this is not a general
 lock against administrator changes to kernel settings.
 
+Forwarding inventory includes non-Ethernet links: tunnels such as `tailscale0`
+can expose an empty hardware address, while other link types use longer addresses.
+The forwarding journal validates these bounded link addresses and still checks
+interface index/address identity before restoration. AP ownership keeps its
+separate, strict six-byte MAC validation.
+
 ## Remaining Bash and validation boundary
 
 [Rust device ownership](native-device-ownership.md) now allocates/creates virtual

@@ -1,0 +1,66 @@
+--- a/panels/network/cc-wifi-panel.c
++++ b/panels/network/cc-wifi-panel.c
+@@ -50,6 +50,7 @@
+     GtkWidget *rfkill_widget;
+ 
+     /* Main widgets */
++    AdwHeaderBar *titlebar;
+     GtkStack *center_stack;
+     GtkStack *device_stack;
+     GtkBox *hotspot_box;
+@@ -728,6 +729,25 @@
+     }
+ }
+ 
++/* Optional downstream bridge: the editor remains independent of this panel. */
++static void
++open_wifi_relay_cb (CcWifiPanel *self)
++{
++    gchar *argv[] = { "wifi-hotspot-settings", "--standalone", NULL };
++    g_autoptr(GError) error = NULL;
++
++    if (!g_spawn_async (NULL, argv, NULL, G_SPAWN_SEARCH_PATH,
++                        NULL, NULL, NULL, &error)) {
++        AdwAlertDialog *dialog;
++
++        dialog = ADW_ALERT_DIALOG (adw_alert_dialog_new (_("Could Not Open Wi-Fi Relay"),
++                                                       error->message));
++        adw_alert_dialog_add_response (dialog, "close", _("Close"));
++        adw_alert_dialog_set_close_response (dialog, "close");
++        adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
++    }
++}
++
+ static void
+ cc_wifi_panel_class_init (CcWifiPanelClass *klass)
+ {
+@@ -744,6 +764,7 @@
+ 
+     gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/network/cc-wifi-panel.ui");
+ 
++    gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, titlebar);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, center_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, device_stack);
+     gtk_widget_class_bind_template_child (widget_class, CcWifiPanel, hotspot_box);
+@@ -771,10 +792,21 @@
+ cc_wifi_panel_init (CcWifiPanel *self)
+ {
+     GtkLabel *hotspot_off_label;
++    g_autofree gchar *relay_program = NULL;
+ 
+     g_resources_register (cc_network_get_resource ());
+ 
+     gtk_widget_init_template (GTK_WIDGET (self));
++
++    relay_program = g_find_program_in_path ("wifi-hotspot-settings");
++    if (relay_program) {
++        GtkWidget *button = gtk_button_new_with_label (_("Wi-Fi Relay"));
++
++        gtk_widget_set_tooltip_text (button, _("Configure concurrent Wi-Fi sharing"));
++        g_signal_connect_object (button, "clicked", G_CALLBACK (open_wifi_relay_cb),
++                                 self, G_CONNECT_SWAPPED);
++        adw_header_bar_pack_end (self->titlebar, button);
++    }
+ 
+     self->devices = g_ptr_array_new ();
+ 

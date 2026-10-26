@@ -1,0 +1,66 @@
+--- a/panels/network/cc-wifi-panel.c
++++ b/panels/network/cc-wifi-panel.c
+@@ -214,7 +214,8 @@
+     /* And add to the header widgets */
+     header_widget = net_device_wifi_get_header_widget (net_device);
+ 
+-    gtk_stack_add_named (self->device_stack, header_widget, nm_device_get_udi (device));
++    /* Udi clears when a virtual device unrealizes; its D-Bus path is stable. */
++    gtk_stack_add_named (self->device_stack, header_widget, nm_object_get_path (NM_OBJECT (device)));
+ 
+     /* Setup custom title properties */
+     g_ptr_array_add (self->devices, net_device);
+@@ -222,7 +223,7 @@
+     update_devices_names (self);
+ 
+     /* Needs to be added after the device is added to the self->devices array */
+-    gtk_stack_add_titled (self->stack, GTK_WIDGET (net_device), nm_device_get_udi (device),
++    gtk_stack_add_titled (self->stack, GTK_WIDGET (net_device), nm_object_get_path (NM_OBJECT (device)),
+                           nm_device_get_description (device));
+     g_signal_connect_object (device, "state-changed", G_CALLBACK (wifi_panel_update_qr_image_cb), self,
+                              G_CONNECT_SWAPPED);
+@@ -236,7 +237,7 @@
+     guint i;
+     gboolean is_visible_device;
+ 
+-    id = nm_device_get_udi (device);
++    id = nm_object_get_path (NM_OBJECT (device));
+ 
+     /* Remove from the devices list */
+     for (i = 0; i < self->devices->len; i++) {
+@@ -433,7 +434,7 @@
+             cc_network_panel_connect_to_8021x_network (toplevel, self->client, device, self->arg_access_point);
+             ret = TRUE;
+         } else if (self->arg_operation == OPERATION_SHOW_DEVICE) {
+-            gtk_stack_set_visible_child_name (self->stack, nm_device_get_udi (device));
++            gtk_stack_set_visible_child_name (self->stack, nm_object_get_path (NM_OBJECT (device)));
+             ret = TRUE;
+         }
+     }
+@@ -501,7 +502,7 @@
+ {
+     const gchar *id;
+ 
+-    id = nm_device_get_udi (device);
++    id = nm_object_get_path (NM_OBJECT (device));
+     /* Don't add a device that has already been added */
+     if (!NM_IS_DEVICE_WIFI (device) || !id)
+         return;
+@@ -541,7 +542,7 @@
+     if (!NM_IS_DEVICE_WIFI (device))
+         return;
+ 
+-    id = nm_device_get_udi (device);
++    id = nm_object_get_path (NM_OBJECT (device));
+     /* Don't remove a device that has already been removed */
+     if (!gtk_stack_get_child_by_name (self->stack, id))
+         return;
+@@ -622,7 +623,7 @@
+     for (i = 0; i < self->devices->len; i++) {
+         NetDeviceWifi *net_device = g_ptr_array_index (self->devices, i);
+ 
+-        if (g_strcmp0 (nm_device_get_udi (net_device_wifi_get_device (net_device)), visible_device_id) == 0) {
++        if (g_strcmp0 (nm_object_get_path (NM_OBJECT (net_device_wifi_get_device (net_device))), visible_device_id) == 0) {
+             self->spinner_binding = g_object_bind_property (net_device, "scanning", self->spinner, "visible",
+                                                             G_BINDING_DEFAULT | G_BINDING_SYNC_CREATE);
+             break;

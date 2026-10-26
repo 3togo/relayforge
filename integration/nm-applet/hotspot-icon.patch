@@ -1,0 +1,80 @@
+--- a/src/ap-menu-item.c
++++ b/src/ap-menu-item.c
+@@ -33,6 +33,7 @@
+ 	GSList *    dupes;
+ 	gboolean    has_connections;
+ 	gboolean    is_adhoc;
++	gboolean    is_hotspot;
+ 	gboolean    is_encrypted;
+ 	gboolean    is_insecure;
+ } NMNetworkMenuItemPrivate;
+@@ -64,7 +65,9 @@
+ 	desc = g_string_new ("");
+ 	g_string_append_printf (desc, "%s: ", priv->ssid_string);
+ 
+-	if (priv->is_adhoc)
++	if (priv->is_hotspot)
++		g_string_append (desc, _("hotspot active"));
++	else if (priv->is_adhoc)
+ 		g_string_append (desc, _("ad-hoc"));
+ 	else {
+ 		g_string_append_printf (desc, "%d%%", priv->int_strength);
+@@ -91,7 +94,9 @@
+ 	int icon_size, scale;
+ 	const char *icon_name = NULL;
+ 
+-	if (priv->is_adhoc)
++	if (priv->is_hotspot)
++		icon_name = "nm-device-wireless";
++	else if (priv->is_adhoc)
+ 		icon_name = "nm-adhoc";
+ 	else
+ 		icon_name = mobile_helper_get_quality_icon_name (priv->int_strength);
+@@ -140,6 +145,18 @@
+ 		gtk_image_set_from_surface (GTK_IMAGE (priv->strength), surface);
+ 		cairo_surface_destroy (surface);
+ 	}
++}
++
++void
++nm_network_menu_item_set_hotspot (NMNetworkMenuItem *item,
++                                   gboolean hotspot,
++                                   NMApplet *applet)
++{
++	g_return_if_fail (NM_IS_NETWORK_MENU_ITEM (item));
++
++	NM_NETWORK_MENU_ITEM_GET_PRIVATE (item)->is_hotspot = hotspot;
++	update_icon (item, applet);
++	update_atk_desc (item);
+ }
+ 
+ void
+--- a/src/ap-menu-item.h
++++ b/src/ap-menu-item.h
+@@ -46,6 +46,10 @@
+ gboolean   nm_network_menu_item_get_is_adhoc (NMNetworkMenuItem *item);
+ gboolean   nm_network_menu_item_get_is_encrypted (NMNetworkMenuItem *item);
+ 
++void       nm_network_menu_item_set_hotspot (NMNetworkMenuItem *item,
++                                              gboolean hotspot,
++                                              NMApplet *applet);
++
+ guint32    nm_network_menu_item_get_strength (NMNetworkMenuItem *item);
+ void       nm_network_menu_item_set_strength (NMNetworkMenuItem *item,
+                                               guint8 strength,
+--- a/src/applet-device-wifi.c
++++ b/src/applet-device-wifi.c
+@@ -886,7 +886,13 @@
+ 		if (active_ap) {
+ 			active_item = item = get_menu_item_for_ap (wdev, active_ap, connections, NULL, applet);
+ 			if (item) {
++				NMSettingWireless *s_wifi = active
++				    ? nm_connection_get_setting_wireless (active) : NULL;
++
+ 				nm_network_menu_item_set_active (item, TRUE);
++				nm_network_menu_item_set_hotspot (item,
++				    s_wifi && g_strcmp0 (nm_setting_wireless_get_mode (s_wifi),
++				                          NM_SETTING_WIRELESS_MODE_AP) == 0, applet);
+ 				menu_items = g_slist_append (menu_items, item);
+ 
+ 				gtk_menu_shell_append (GTK_MENU_SHELL (menu), GTK_WIDGET (item));

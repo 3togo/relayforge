@@ -150,7 +150,7 @@ async fn activate(
             &(profile.clone(), device.clone(), specific.clone()),
         )
         .await?;
-    wait_active(&bus, &active).await
+    wait_active(bus, &active).await
 }
 
 fn verified(snapshot: &Snapshot, target: &str, ssid: &str) -> bool {
