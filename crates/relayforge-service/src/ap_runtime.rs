@@ -496,7 +496,11 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             if !path.exists() {
                 return Ok(None);
             }
-            let stat = fs::read_to_string(path.join("stat")).map_err(|_| e)?;
+            let stat = match fs::read_to_string(path.join("stat")) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(e),
+            };
             if stat
                 .rsplit_once(')')
                 .is_some_and(|(_, s)| s.split_whitespace().next() == Some("Z"))
@@ -506,33 +510,36 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             return Err(e);
         }
     };
-    let path = PathBuf::from(format!("/proc/{pid}"));
-    let uid = fs::metadata(&path)
-        .map_err(|_| "Cannot inspect child user")?
-        .uid();
-    let exe = fs::read_link(path.join("exe"))
-        .map_err(|_| "Cannot inspect child executable")?
-        .to_str()
-        .ok_or("Invalid child executable")?
-        .trim_end_matches(" (deleted)")
-        .to_owned();
-    let mut bytes = Vec::new();
-    File::open(path.join("cmdline"))
-        .and_then(|f| f.take(16385).read_to_end(&mut bytes))
-        .map_err(|_| "Cannot inspect child arguments")?;
-    if bytes.len() > 16384 || bytes.is_empty() {
-        return Err("Invalid child arguments");
-    }
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
-    let args = text
-        .trim_end_matches('\0')
-        .split('\0')
-        .map(str::to_owned)
-        .collect();
-    if !birth.live()? {
+    let inspected = birth.inspect(|| {
+        let path = PathBuf::from(format!("/proc/{pid}"));
+        let uid = fs::metadata(&path)
+            .map_err(|_| "Cannot inspect child user")?
+            .uid();
+        let exe = fs::read_link(path.join("exe"))
+            .map_err(|_| "Cannot inspect child executable")?
+            .to_str()
+            .ok_or("Invalid child executable")?
+            .trim_end_matches(" (deleted)")
+            .to_owned();
+        let mut bytes = Vec::new();
+        File::open(path.join("cmdline"))
+            .and_then(|f| f.take(16385).read_to_end(&mut bytes))
+            .map_err(|_| "Cannot inspect child arguments")?;
+        if bytes.len() > 16384 || bytes.is_empty() {
+            return Err("Invalid child arguments");
+        }
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
+        let args = text
+            .trim_end_matches('\0')
+            .split('\0')
+            .map(str::to_owned)
+            .collect();
+        Ok((uid, exe, hash, args))
+    })?;
+    let Some((uid, exe, hash, args)) = inspected else {
         return Ok(None);
-    }
+    };
     Ok(Some(Observed {
         uid,
         identity: Identity {

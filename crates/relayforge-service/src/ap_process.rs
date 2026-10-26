@@ -69,6 +69,24 @@ impl Birth {
         }
         Ok(stat(self.pid)?.is_some_and(|(start, zombie)| start == self.start && !zombie))
     }
+    /// Procfs reads are not atomic with exit. Keep inspection failures for a
+    /// live identity, but do not turn an already-exited child into a cleanup error.
+    pub fn inspect<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+        let result = read();
+        if !self.live()? {
+            return Ok(None);
+        }
+        if result.is_err() {
+            // Linux can release /proc/PID/exe before publishing zombie state.
+            // Confirm exit through the pidfd; a still-live process keeps its error.
+            match Handle::open(self)? {
+                None => return Ok(None),
+                Some(handle) if handle.wait_exited(100)? => return Ok(None),
+                Some(_) => {}
+            }
+        }
+        result.map(Some)
+    }
 }
 pub struct Handle {
     fd: File,
@@ -98,12 +116,15 @@ impl Handle {
         }))
     }
     pub fn exited(&self) -> Result<bool> {
+        self.wait_exited(0)
+    }
+    fn wait_exited(&self, timeout_ms: i32) -> Result<bool> {
         let mut fd = libc::pollfd {
             fd: self.fd.as_raw_fd(),
             events: libc::POLLIN,
             revents: 0,
         };
-        let code = unsafe { libc::poll(&mut fd, 1, 0) };
+        let code = unsafe { libc::poll(&mut fd, 1, timeout_ms) };
         if code < 0 {
             return Err("Cannot inspect owned process handle");
         }
@@ -116,6 +137,12 @@ impl Handle {
         if self.exited()? || !self.birth.live()? {
             return Ok(false);
         }
+        Ok(self
+            .birth
+            .inspect(|| self.verify_live_as(allowed, uid))?
+            .is_some())
+    }
+    fn verify_live_as(&self, allowed: &[(String, Vec<String>)], uid: u32) -> Result<()> {
         let path = format!("/proc/{}", self.birth.pid);
         if fs::metadata(&path)
             .map_err(|_| "Cannot inspect child owner")?
@@ -145,7 +172,7 @@ impl Handle {
         if !allowed.iter().any(|(e, a)| *e == exe && *a == args) {
             return Err("Owned process command changed; refusing signal");
         }
-        Ok(true)
+        Ok(())
     }
     pub fn signal(&self, signal: i32, allowed: &[(String, Vec<String>)]) -> Result<()> {
         self.signal_as(signal, allowed, unsafe { libc::geteuid() })
@@ -189,6 +216,29 @@ pub fn trusted_file(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inspection_failure_for_a_live_identity_is_preserved() {
+        let birth = Birth::capture(std::process::id()).unwrap();
+        assert_eq!(
+            birth.inspect::<()>(|| Err("permission denied")),
+            Err("permission denied")
+        );
+        assert_eq!(birth.inspect(|| Ok(42)), Ok(Some(42)));
+    }
+    #[test]
+    fn inspection_failure_after_child_exit_is_not_a_cleanup_failure() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let birth = Birth::capture(child.id()).unwrap();
+        let result = birth.inspect::<()>(|| {
+            child.kill().unwrap();
+            Err("Cannot inspect child executable")
+        });
+        child.wait().unwrap();
+        assert_eq!(result, Ok(None));
+    }
     #[test]
     fn reused_birth_and_wrong_argv_are_never_signalled() {
         let birth = Birth::capture(std::process::id()).unwrap();

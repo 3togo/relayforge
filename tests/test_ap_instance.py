@@ -150,7 +150,7 @@ class InstanceTests(unittest.TestCase):
                     self.assertEqual(len(json.loads((directory/'daemons.json').read_text())['children']),children)
                     self.assertEqual(len(json.loads((c.state/'firewall-state.json').read_text())['rules']),rules)
                     if patch.get('SHARE_METHOD')=='none':self.assertFalse((c.state/'engine/forwarding.json').exists())
-                    process.send_signal(signal.SIGUSR1);process.wait(8);self.assertEqual(process.returncode,0)
+                    process.send_signal(signal.SIGUSR1);process.wait(8);self.assertEqual(process.returncode,0,process.stderr.read())
 
     def test_dedicated_adapter_restores_interface_and_managed_state(self):
         from test_radio import capture
@@ -166,7 +166,7 @@ class InstanceTests(unittest.TestCase):
             with running(c,args,marker) as process:
                 directory=next((c.state/'engine').glob('create_ap.*.conf.*'))
                 self.assertEqual(json.loads((directory/'recovery.json').read_text())['fields']['PHYSICAL_CONFIGURED'],'1')
-                process.send_signal(signal.SIGUSR1);process.wait(8);self.assertEqual(process.returncode,0)
+                process.send_signal(signal.SIGUSR1);process.wait(8);self.assertEqual(process.returncode,0,process.stderr.read())
             after=json.loads(path.read_text());self.assertEqual(after['interfaces'],before['interfaces'])
             self.assertEqual(after['nm']['devices'],before['nm']['devices'])
 
