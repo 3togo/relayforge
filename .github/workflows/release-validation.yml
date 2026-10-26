@@ -15,7 +15,9 @@ jobs:
         run: |
           sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates cargo rustc dpkg-dev python3 python3-gi dbus-daemon tini dnsmasq-base xvfb xauth gir1.2-gtk-3.0 gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-ayatanaappindicator3-0.1
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates cargo rustc dpkg-dev python3 python3-gi dbus-daemon tini dnsmasq-base locales xvfb xauth gir1.2-gtk-3.0 gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-ayatanaappindicator3-0.1
+          # GNOME Control Center's keyboard tests explicitly require this locale.
+          localedef -i en_US -f UTF-8 en_US.UTF-8
           DEBIAN_FRONTEND=noninteractive apt-get build-dep -y network-manager-applet gnome-control-center
           useradd --create-home builder
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
