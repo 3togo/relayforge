@@ -108,6 +108,7 @@ def build(args):
         copy(payload, 'usr/lib/relayforge/settings/tray.py', ROOT / 'desktop/tray.py')
         for name in ('main.py', 'device_info.py', 'adapter_limits.py'):
             copy(payload, 'usr/lib/relayforge/settings/' + name, ROOT / 'desktop' / name)
+        put(payload, 'usr/lib/relayforge/settings/build_info.py', f'VERSION = {version!r}\n')
         # GNOME Shell integration ships from the pinned vendor tree so the
         # first-login dispatcher can enable it; KDE and XFCE get the tray instead.
         extension = 'usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io'

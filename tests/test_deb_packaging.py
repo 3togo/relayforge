@@ -62,6 +62,9 @@ class DebPackagingTests(unittest.TestCase):
                 payload = work / 'payload'
                 subprocess.run(['dpkg-deb', '--raw-extract', str(package), str(payload)],
                                check=True, capture_output=True)
+                version = subprocess.check_output(['dpkg-deb', '--field', str(package), 'Version'], text=True).strip()
+                self.assertEqual((payload / 'usr/lib/relayforge/settings/build_info.py').read_text(),
+                                 f'VERSION = {version!r}\n')
                 depends = subprocess.check_output(
                     ['dpkg-deb', '--field', str(package), 'Depends'], text=True)
                 for dependency in ('gir1.2-gtk-3.0', 'gir1.2-ayatanaappindicator3-0.1'):

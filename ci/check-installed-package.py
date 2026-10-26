@@ -1,5 +1,6 @@
 """Verify installed assets and exercise the installed service on a private bus."""
 import hashlib
+import runpy
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,8 @@ for name in ('main.py', 'device_info.py', 'adapter_limits.py', 'tray.py'):
     source = settings / name
     assert source.stat().st_mode & 0o777 == 0o644
     compile(source.read_text(), str(source), 'exec')
+assert runpy.run_path(str(settings / 'build_info.py'))['VERSION'] == subprocess.check_output(
+    ['dpkg-query', '-W', '-f=${Version}', 'relayforge'], text=True).strip()
 assert Path('/usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io/extension.js').is_file()
 if variant == 'desktop-integrated':
     assert Path('/usr/share/gnome-control-center/wifi-relay-entrypoint').read_text().strip() == '1'

@@ -35,6 +35,11 @@ try:
 except ModuleNotFoundError:
     from settings.wifi_qr import wifi_payload, qr_rgb
 
+try:
+    from build_info import VERSION
+except ModuleNotFoundError:
+    VERSION = "development"
+
 BUS_NAME = "io.github.erhanzeyrek.WifiHotspot"
 OBJECT_PATH = "/io/github/erhanzeyrek/WifiHotspot"
 INTERFACE_NAME = "io.github.erhanzeyrek.WifiHotspot"
@@ -967,7 +972,7 @@ class HotspotAboutApp(HotspotApplication):
         win = self.props.active_window
         if not win:
             if not GNOME_DESKTOP:
-                win = Gtk.AboutDialog(application=self, program_name="Wi-Fi Relay", version="1.0.0",
+                win = Gtk.AboutDialog(application=self, program_name="Wi-Fi Relay", version=VERSION,
                     logo_icon_name=BUS_NAME, authors=["Erhan Zeyrek", "Wi-Fi Relay contributors"],
                     copyright="© 2026 Wi-Fi Relay contributors", license_type=Gtk.License.MIT_X11,
                     website="https://github.com/3togo/gnome-wifi-hotspot",
@@ -981,7 +986,7 @@ class HotspotAboutApp(HotspotApplication):
                 application=self,
                 application_name="Wi-Fi Relay",
                 application_icon=BUS_NAME,
-                version="1.0.0",
+                version=VERSION,
                 developer_name="Erhan Zeyrek and Wi-Fi Relay contributors",
                 developers=["Erhan Zeyrek", "Wi-Fi Relay contributors"],
                 copyright="© 2026 Wi-Fi Relay contributors",
