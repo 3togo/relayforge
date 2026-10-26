@@ -10,7 +10,7 @@ from pathlib import Path
 import unittest
 
 from test_create_ap import bench as ap_bench
-from test_dbus import BINARY, ROOT, call, decode_reply
+from test_dbus import BINARY, ROOT, call, decode_reply, wait_for
 from test_networkmanager import bench as nm_bench
 
 
@@ -33,7 +33,9 @@ class CreateApTeardownTests(unittest.TestCase):
                              context.state, ROOT / 'tests/fake_create_ap.sh')
             self.assertEqual(result.returncode, 0, result.stderr)
             context.clean(self)
-            self.assertFalse(Path(f'/proc/{pid}').exists())
+            # Recovery waits for exit; the adopting init/subreaper performs
+            # waitpid asynchronously. Still require the process to be reaped.
+            wait_for(lambda: not Path(f'/proc/{pid}').exists())
 
     def test_recovery_is_idempotent_and_needs_no_configuration(self):
         with ap_bench() as context:

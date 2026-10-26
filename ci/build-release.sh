@@ -17,7 +17,9 @@ export CARGO_TARGET_DIR="$root/target"
 cargo build --release --locked -p relayforge-service > "$logs/release-build.log" 2>&1
 cargo test --workspace --locked > "$logs/rust-tests.log" 2>&1
 python3 tools/check-vendor.py > "$logs/vendor-check.log" 2>&1
-RELAYFORGE_BINARY="$CARGO_TARGET_DIR/release/relayforge-service" xvfb-run -a dbus-run-session -- python3 -m unittest discover -s tests -v > "$logs/python-tests.log" 2>&1
+# Crash tests deliberately orphan helpers. The Actions container's PID 1 does
+# not reap them; use a subreaper so dead helpers cannot remain as zombies.
+RELAYFORGE_BINARY="$CARGO_TARGET_DIR/release/relayforge-service" tini -s -- xvfb-run -a dbus-run-session -- python3 -m unittest discover -s tests -v > "$logs/python-tests.log" 2>&1
 xvfb-run -a bash integration/nm-applet/test.sh > "$logs/menu-tests.log" 2>&1
 SANITIZE=1 xvfb-run -a bash integration/nm-applet/test.sh > "$logs/menu-sanitizer-tests.log" 2>&1
 python3 tools/build-deb.py --binary "$CARGO_TARGET_DIR/release/relayforge-service" --backend create_ap --output-dir artifacts/release/standard > "$logs/standard-package.log" 2>&1
