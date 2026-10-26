@@ -20,7 +20,7 @@ jobs:
           localedef -i en_US -f UTF-8 en_US.UTF-8
           DEBIAN_FRONTEND=noninteractive apt-get build-dep -y network-manager-applet gnome-control-center
           useradd --create-home builder
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node.js 24)
         with:
           fetch-depth: 0
       - name: Build packages and run complete suites
@@ -28,20 +28,20 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           runuser -u builder -- bash ci/build-release.sh
       - name: Upload release packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node.js 24)
         with:
           name: relayforge-0.1.1-ubuntu26.10-amd64
           path: artifacts/release/
           if-no-files-found: error
       - name: Upload upgrade baseline
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node.js 24)
         with:
           name: upgrade-baseline
           path: artifacts/upgrade-baseline/*.deb
           if-no-files-found: error
       - name: Upload build and test logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node.js 24)
         with:
           name: build-test-logs
           path: |
@@ -57,12 +57,12 @@ jobs:
     container: ubuntu:26.10
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node.js 24)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2 (Node.js 24)
         with:
           name: relayforge-0.1.1-ubuntu26.10-amd64
           path: artifacts/release
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2 (Node.js 24)
         with:
           name: upgrade-baseline
           path: artifacts/upgrade-baseline
@@ -74,7 +74,7 @@ jobs:
           bash ci/package-lifecycle.sh "$VARIANT" > "artifacts/lifecycle/$VARIANT.log" 2>&1
       - name: Upload lifecycle evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2 (Node.js 24)
         with:
           name: lifecycle-${{ matrix.variant }}
           path: artifacts/lifecycle/
