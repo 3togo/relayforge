@@ -403,7 +403,11 @@ class HotspotTray extends PanelMenu.Button {
         this._statusItem = new PopupMenu.PopupMenuItem('', {reactive: false});
         this.menu.addMenuItem(this._statusItem);
         this._switch = new PopupMenu.PopupSwitchMenuItem(_('Wi-Fi Relay'), false);
-        this._switch.connect('toggled', () => extension._indicator?._toggle._onToggleClicked());
+        this._syncingSwitch = false;
+        this._switch.connect('toggled', () => {
+            if (!this._syncingSwitch)
+                extension._indicator?._toggle._onToggleClicked();
+        });
         this.menu.addMenuItem(this._switch);
         this._details = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._details);
@@ -424,7 +428,14 @@ class HotspotTray extends PanelMenu.Button {
         this._icon.style_class = `system-status-icon hotspot-tray-${state}`;
         this.accessible_name = `${_('Wi-Fi Relay')}: ${label}`;
         this._statusItem.label.text = this.accessible_name;
-        this._switch.setToggleState(!!(status.active || status.desired_active));
+        // GNOME emits 'toggled' for programmatic state changes too.
+        // Status synchronization must never start or stop the hotspot.
+        this._syncingSwitch = true;
+        try {
+            this._switch.setToggleState(!!(status.active || status.desired_active));
+        } finally {
+            this._syncingSwitch = false;
+        }
         this._switch.setSensitive(!busy && !stopping &&
             (status.state !== 'connecting' || !!status.desired_active));
         this._details.removeAll();

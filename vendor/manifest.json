@@ -26,7 +26,7 @@
     "data/wifi-relay-gnome.desktop": "7283b8d85184dbbf8812f4904b3982399f5f434999e08e6dd291ad537585938b",
     "data/wifi-relay-tray.desktop": "af7df75f571d621bca6715bc047687ecfdb2630d6be607cd839899625d413ba2",
     "data/wifi-relay-tray.service": "4e22a2d0105b65884dbbea768d2a9cc09523730dddd87c1a9a1d5b0c9fad5ff9",
-    "extension/extension.js": "51ffe3da7051c472d7c8e9ddca1db30437d7fd2c991418bb3af339c0fefd068f",
+    "extension/extension.js": "b5fb08237057d0255a934836593b185fde491f0813bdab980d61d9a379799029",
     "extension/metadata.json": "4a34f612309218b3c48d21305126cb709d93dee2a92162169022fa736b0af554",
     "extension/prefs.js": "6a819dfb8e967b4473c2057ce74102550aef83cf309da04898dd6d117b597c95",
     "extension/startup.js": "b7e98f41eee2d1dde7d54aa6abd239334b36f062ccfe707f79c4d0f08dcf0e59",
