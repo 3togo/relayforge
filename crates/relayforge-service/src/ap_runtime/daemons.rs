@@ -403,6 +403,18 @@ impl Drop for Running {
         for task in &self.output {
             task.abort();
         }
+        // `kill_on_drop` only starts the kill: without a wait the daemon stays a
+        // zombie until this service exits, and every start/stop cycle would leak
+        // another process-table entry. Reap it here. A destructor cannot await,
+        // so this is bounded and best effort; SIGKILL delivery is quick.
+        let _ = self.child.start_kill();
+        for _ in 0..50 {
+            match self.child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                Err(_) => break,
+            }
+        }
     }
 }
 async fn launch(

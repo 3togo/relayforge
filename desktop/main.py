@@ -249,6 +249,7 @@ class HotspotSettingsWindow(WindowBase):
         self._clients_pending = False
         self._status_revision = 0
         self._save_timer = 0
+        self._idle_sources = []
         self._pending_config = None
         self._closing_after_save = False
         self._retry_action = None
@@ -269,12 +270,33 @@ class HotspotSettingsWindow(WindowBase):
             self._load_fallback_config()
             self._loading_fields = False
             self._show_failure("Hotspot service unavailable", error, "load")
-            GLib.idle_add(self._fit_loaded_content)
+            self._idle(self._fit_loaded_content)
             return
         if not self._loaded:
             self._load_data()
         else:
             self._refresh_status()
+
+    def _idle(self, callback):
+        # An untracked idle source keeps the window alive until it runs and can
+        # fire after the widgets are freed, so track it and cancel it on close.
+        if self._closed:
+            return 0
+
+        def run():
+            self._idle_sources = [source for source in self._idle_sources
+                                  if source != identifier]
+            if self._closed:
+                return GLib.SOURCE_REMOVE
+            try:
+                return callback() or GLib.SOURCE_REMOVE
+            except Exception:
+                # One bad redraw must not kill the main loop.
+                return GLib.SOURCE_REMOVE
+
+        identifier = GLib.idle_add(run)
+        self._idle_sources.append(identifier)
+        return identifier
 
     def _on_close(self, *_args):
         if self._closed:
@@ -307,9 +329,10 @@ class HotspotSettingsWindow(WindowBase):
 
     def _close_resources(self):
         self._closed = True
-        for source in (self._status_timer, self._save_timer):
+        for source in (*self._idle_sources, self._status_timer, self._save_timer):
             if source:
                 GLib.source_remove(source)
+        self._idle_sources = []
         self._status_timer = self._save_timer = 0
         self.adapter_limit.close()
         self.client.close()
@@ -653,7 +676,7 @@ class HotspotSettingsWindow(WindowBase):
             else:
                 self._clear_failure("load")
             self._refresh_status()
-            GLib.idle_add(self._fit_loaded_content)
+            self._idle(self._fit_loaded_content)
 
         self.client.call("GetInterfaces", interfaces_loaded)
 
@@ -730,7 +753,11 @@ class HotspotSettingsWindow(WindowBase):
         self._populate_fields(conf)
 
     def _refresh_status(self):
-        self.adapter_limit.refresh(self.interfaces["wifi_interfaces"])
+        try:
+            self.adapter_limit.refresh(self.interfaces["wifi_interfaces"])
+        except Exception:
+            # A transient sysfs/D-Bus error must not stop the periodic refresh.
+            pass
         if self._closed:
             return GLib.SOURCE_REMOVE
         if not self.dbus_proxy or self._hotspot_busy or self._status_pending:

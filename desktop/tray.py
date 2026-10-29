@@ -150,6 +150,8 @@ class HotspotTray(Gtk.Application):
         Gtk.Application.do_shutdown(self)
 
     def _restart_after_upgrade(self):
+        if self.closed:
+            return GLib.SOURCE_REMOVE
         arguments = list(sys.argv)
         if self.manual_start and '--show-icon' not in arguments:
             arguments.append('--show-icon')
