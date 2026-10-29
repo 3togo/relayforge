@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "relayforge-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "relayforge-service"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-util",
  "libc",
