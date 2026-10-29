@@ -104,8 +104,21 @@ never prompt. Remote and inactive sessions are still denied. The policy still ga
 every protected call, and the pinned upstream policy that asks for administrator
 authentication on each call is available in `vendor/wifi-relay/data/`.
 The Wi-Fi Relay GNOME Shell extension ships in the package and is enabled on
-first login; patched NetworkManager applet, NetworkManager core and
-gnome-control-center integrations are not included. Shared-library dependencies are calculated
+first login. To also build the patched NetworkManager applet and GNOME Settings
+Wi-Fi panel on the supported Ubuntu 26.10 baseline, use:
+
+```sh
+sudo apt-get build-dep network-manager-applet gnome-control-center
+./tools/build-deb.sh --backend create_ap --desktop-integrations both --output-dir artifacts/desktop-debs
+sudo apt install ./artifacts/desktop-debs/*.deb
+```
+
+This produces the RelayForge package plus matching desktop packages. The RelayForge
+package requires their exact versions, so installing only its `.deb` cannot silently
+omit the UI integrations. The default build still uses stock desktop packages;
+`--desktop-integrations nm-applet` or `gnome-settings` selects just one integration.
+See [desktop integration](integration/README.md) for supported versions and behavior.
+NetworkManager core is not patched. Shared-library dependencies are calculated
 with `dpkg-shlibdeps`; generate packages on the target distribution rather than
 assuming a binary built on a newer distribution will work on an older one.
 

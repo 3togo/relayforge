@@ -31,7 +31,47 @@ class TrayFeedbackTests(unittest.TestCase):
 
     def labels(self):
         return [item.get_child().get_text() for item in self.app.menu.get_children()
-                if isinstance(item.get_child(), Gtk.Label)]
+                if item.get_visible() and isinstance(item.get_child(), Gtk.Label)]
+
+    def test_refresh_keeps_open_menu_and_action_widgets(self):
+        self.app.status = {'active': True, 'ssid': 'Test', 'client_count': 0}
+        self.app._render()
+        self.app._render()
+        self.app.indicator.set_icon_full.assert_called_once()
+        menu = self.app.menu
+        switch = menu.get_children()[1]
+        settings = next(item for item in menu.get_children()
+                        if item.get_label() == 'Hotspot Settings')
+        self.app._request_change = Mock()
+        for status in [dict(self.app.status), {'active': False},
+                       {'active': True, 'ssid': 'Test', 'client_count': 1}]:
+            self.app.status = status
+            self.app._render()
+            self.assertIs(self.app.menu, menu)
+            self.assertIs(menu.get_children()[1], switch)
+            self.assertIn(settings, menu.get_children())
+        self.app.indicator.set_menu.assert_called_once_with(menu)
+        self.app._request_change.assert_not_called()
+
+    def test_client_updates_keep_actions_and_user_toggle_works(self):
+        self.app.status = {'active': True, 'ssid': 'Test'}
+        self.app.clients = [{'hostname': 'Phone', 'ip': '192.168.12.2'}]
+        self.app._render()
+        menu = self.app.menu
+        switch = self.app.switch
+        client_row = self.app.client_rows[0]
+        self.app._request_change = Mock()
+        self.app.clients = [{'hostname': 'Tablet', 'ip': '192.168.12.3'}]
+        self.app._render()
+        self.assertIs(self.app.client_rows[0], client_row)
+        self.assertIn('Tablet (192.168.12.3)', self.labels())
+        self.app.clients = []
+        self.app._render()
+        self.assertNotIn(client_row, menu.get_children())
+        self.assertIs(self.app.menu, menu)
+        self.app._request_change.assert_not_called()
+        switch.set_active(False)
+        self.app._request_change.assert_called_once_with('Stop')
 
     def test_failed_status_survives_refresh_and_explains_channel_remedy(self):
         data = {'active': False, 'state': 'failed', 'error':

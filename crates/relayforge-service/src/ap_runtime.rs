@@ -98,6 +98,15 @@ impl Platform {
         Directory::open(path)
     }
     fn interface(&self, iface: &str) -> Result<Option<Interface>> {
+        let identity = self.link_interface(iface)?;
+        if let Some(identity) = &identity {
+            valid_mac(&identity.mac)?;
+        }
+        Ok(identity)
+    }
+    // Forwarding covers all links, including tunnels without a hardware address
+    // and non-Ethernet links. AP ownership continues to use interface() above.
+    fn link_interface(&self, iface: &str) -> Result<Option<Interface>> {
         interface_name(iface)?;
         let net = self.net.join(iface);
         let index = match fs::read_to_string(net.join("ifindex")) {
@@ -109,7 +118,7 @@ impl Platform {
             .map_err(|_| "Cannot inspect recovery interface MAC")?
             .trim()
             .to_owned();
-        valid_mac(&mac)?;
+        valid_link_address(&mac)?;
         let ifindex = index
             .trim()
             .parse::<u32>()
@@ -153,6 +162,18 @@ fn valid_mac(value: &str) -> Result<()> {
             .all(|v| v.len() == 2 && v.bytes().all(|b| b.is_ascii_hexdigit()))
     {
         return Err("Invalid recovery MAC");
+    }
+    Ok(())
+}
+fn valid_link_address(value: &str) -> Result<()> {
+    // Linux MAX_ADDR_LEN is 32 bytes; ARPHRD_NONE devices expose an empty address.
+    if !value.is_empty()
+        && (value.len() > 95
+            || !value.split(':').all(|v| {
+                v.len() == 2 && v.bytes().all(|b| b.is_ascii_hexdigit())
+            }))
+    {
+        return Err("Invalid forwarding link address");
     }
     Ok(())
 }
@@ -1213,6 +1234,19 @@ pub(crate) async fn finish_instance_cleanup(marker: &Path, fixture: Option<&Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forwarding_link_addresses_do_not_relax_ap_mac_validation() {
+        for address in [String::new(), vec!["ab"; 20].join(":"), vec!["ab"; 32].join(":")] {
+            assert!(valid_link_address(&address).is_ok());
+            assert!(valid_mac(&address).is_err());
+        }
+        for address in ["ab:", "a:b", "zz", "ab\ncd"] {
+            assert!(valid_link_address(address).is_err());
+        }
+        assert!(valid_link_address(&vec!["ab"; 33].join(":")).is_err());
+        assert!(valid_link_address("02:00:00:00:00:01").is_ok());
+        assert!(valid_mac("02:00:00:00:00:01").is_ok());
+    }
     #[test]
     fn privilege_drop_policy_only_extends_root_dnsmasq_recording() {
         assert!(recording_uid("dnsmasq", 0, 65534));

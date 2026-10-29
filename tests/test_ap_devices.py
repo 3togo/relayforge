@@ -47,6 +47,18 @@ def manager(b,**control):
 
 
 class DeviceOwnershipTests(unittest.TestCase):
+    def test_new_virtual_device_is_explicitly_released_during_nm_discovery(self):
+        with bench() as b:
+            before=prepare(b);s=read(b);s['nm_bus']=True;write(b,s)
+            with manager(b,initializing_virtual=True):
+                b.invoke('interface-create');name=iface(b)
+                b.invoke('device-release')
+                b.invoke('interface-configure')
+                self.assertFalse(read(b)['nm']['devices'][name]['managed'])
+                finish(b)
+                self.assertEqual(read(b)['interfaces'],before['interfaces'])
+                self.assertEqual(read(b)['nm']['devices']['demo0'],before['nm']['devices']['demo0'])
+
     def test_creation_journal_snapshot_and_structured_command_preserve_parent(self):
         with bench() as b:
             before=prepare(b);result=b.invoke('interface-create');name=iface(b);s=read(b)

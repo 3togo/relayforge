@@ -515,6 +515,20 @@ impl Snapshot {
 mod tests {
     use super::*;
     #[test]
+    fn adapter_without_ap_mode_cannot_be_used_as_hotspot() {
+        let mut record = Capture::demo("wlxe84e0648d7eb");
+        record.phy = record.phy.replace("* AP", "* monitor");
+        let radio = Snapshot::parse(&record).unwrap();
+        assert!(!radio.capabilities.ap_2ghz && !radio.capabilities.ap_5ghz);
+        let mut config = config::defaults();
+        config.insert("WIFI_IFACE".into(), "wlxe84e0648d7eb".into());
+        config.insert("INTERNET_IFACE".into(), "eth0".into());
+        for backend in ["create_ap", "networkmanager"] {
+            config.insert("BACKEND".into(), backend.into());
+            assert!(radio.preflight(&config).is_err());
+        }
+    }
+    #[test]
     fn unsupported_flags_are_never_permissions_and_duplicates_intersect() {
         for flag in [
             "disabled",

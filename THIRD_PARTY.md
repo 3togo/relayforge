@@ -13,7 +13,12 @@ The Wi-Fi Relay snapshot is derived from Erhan Zeyrek's GNOME Wi-Fi Hotspot and
 The copied Debian copyright inventory is retained as provenance under
 vendor/wifi-relay/packaging/licenses/copyright. Its integration entries describe
 the upstream project; no NetworkManager, applet, or GNOME Settings integration
-patches are included in this snapshot. Cargo.lock identifies Rust dependencies;
+patches are included in that pinned snapshot. Separate maintained applet and
+GNOME Settings integrations now live in `integration/`, derived from Wi-Fi Relay
+revision `12f9f78e2cf4e9f41abacf94fbf5f5524bf47814`. They are copyright 2026
+Wi-Fi Relay contributors, licensed GPL-2.0-or-later; see `integration/COPYING`.
+The dependency-minimization helper in `tools/minimize-integrations.py` comes from
+the same revision under the upstream MIT license. Cargo.lock identifies Rust dependencies;
 their individual licenses remain applicable.
 
 Native configuration validation uses unicode-general-category 1.1.0
@@ -31,3 +36,7 @@ script. Compatibility mode retains the original vendor backend and its notices.
 `desktop/tray.py` adapts the MIT-licensed pinned Wi-Fi Relay tray for RelayForge.
 The original notice remains in LICENSE and the unmodified source remains under
 `vendor/wifi-relay/settings/tray.py`.
+
+`desktop/main.py` similarly adapts the pinned MIT-licensed settings window,
+adding descriptive device selectors. Its original remains under
+`vendor/wifi-relay/settings/main.py`.

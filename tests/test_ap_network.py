@@ -102,6 +102,23 @@ class NetworkTransactions(unittest.TestCase):
                     b.invoke('network-check')
                     self.assertEqual(read(b)['interfaces'],before['interfaces'])
 
+    def test_setup_aborted_before_journal_still_removes_owned_virtual_ap(self):
+        """A start that dies before interface-configure records its journal must still
+        clean up the virtual AP we created. Seen on real hardware: the interface stayed
+        `type managed`, every later cleanup refused with "Unjournalled AP identity
+        changed", and the adapter was left behind with no way to remove it."""
+        for kind in ['managed','monitor']:
+            with self.subTest(kind=kind), bench() as b:
+                s=prepare(b)
+                s['interfaces']['aptest0']['kind']=kind
+                write(b,s)
+                if kind=='monitor': b.invoke('interface-configure',ok=False)
+                self.assertFalse((b.directory/'interface.json').exists())
+                b.invoke('interface-remove')
+                b.invoke('network-check')
+                self.assertNotIn('aptest0',read(b)['interfaces'])
+                self.assertEqual(read(b)['interfaces']['demo0'],s['interfaces']['demo0'])
+
     def test_changed_identity_or_foreign_address_blocks_cleanup(self):
         for change in ['index','mac','address','connected']:
             with self.subTest(change=change),bench() as b:
@@ -151,6 +168,30 @@ class NetworkTransactions(unittest.TestCase):
                 self.assertEqual(after['global'],before['global'])
                 self.assertFalse((b.engine/'forwarding.json').exists())
                 self.assertEqual(after['interfaces'],before['interfaces'])
+
+    def test_forwarding_preserves_non_ethernet_interfaces(self):
+        for address in ['', ':'.join(['ab']*20)]:
+            with self.subTest(address=address),bench() as b:
+                before=prepare(b)
+                before['interfaces']['tunnel0']=device(9,address,kind='tunnel')
+                before['forwarding']['tunnel0']=0
+                write(b,before)
+                b.invoke('forwarding-enable')
+                b.invoke('forwarding-release');b.invoke('network-check')
+                self.assertEqual(read(b)['forwarding'],before['forwarding'])
+                self.assertEqual(read(b)['interfaces'],before['interfaces'])
+
+    def test_forwarding_non_ethernet_identity_change_blocks_restoration(self):
+        with bench() as b:
+            before=prepare(b)
+            before['interfaces']['tunnel0']=device(9,'',kind='tunnel')
+            before['forwarding']['tunnel0']=0;write(b,before)
+            b.invoke('forwarding-enable')
+            changed=read(b);changed['interfaces']['tunnel0']['identity']['ifindex']=10;write(b,changed)
+            b.invoke('forwarding-release',ok=False)
+            self.assertTrue((b.engine/'forwarding.json').exists())
+            changed=read(b);changed['interfaces']['tunnel0']['identity']['ifindex']=9;write(b,changed)
+            b.invoke('forwarding-release');b.invoke('network-check')
 
     def test_forwarding_faults_remain_retryable(self):
         for fault in ['fail_at','lose_at']:

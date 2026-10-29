@@ -479,7 +479,11 @@ async fn release(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<()> {
                 .read("device.json", true, LIMIT)?
                 .ok_or("Missing device intent")?;
         }
-        if actual.managed {
+        // Newly discovered virtual devices can report Managed=false before NM
+        // finishes initializing them. Pin our own AP unmanaged explicitly;
+        // observing that transient value alone does not transfer ownership.
+        // An existing unmanaged physical adapter keeps its original policy.
+        if actual.managed || intent.virtual_ap {
             intent
                 .identity(p)
                 .await?

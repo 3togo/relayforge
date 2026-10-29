@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ] && [ -z "${DPKG_ROOT:-}" ]; then
+    /usr/bin/python3 -I /usr/libexec/wifi-relay-nm-applet/restart-applet.py || true
+fi
+#DEBHELPER#

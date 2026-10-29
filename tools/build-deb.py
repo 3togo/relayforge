@@ -15,6 +15,10 @@ from datetime import datetime, timezone
 import gzip
 
 ROOT = Path(__file__).resolve().parents[1]
+DESKTOP_PACKAGES = {
+    'nm-applet': ('network-manager-applet', '1.36.0-4ubuntu1+relayforge1'),
+    'gnome-settings': ('gnome-control-center', '1:51.0-1ubuntu1+relayforge1'),
+}
 
 
 def run(*args, **kwargs):
@@ -76,6 +80,12 @@ def build(args):
     if package.exists() and not args.force:
         raise FileExistsError(
             f'Refusing to overwrite {package} (pass --force to replace it)')
+    integrations = (list(DESKTOP_PACKAGES) if args.desktop_integrations == 'both'
+                    else [] if args.desktop_integrations == 'none'
+                    else [args.desktop_integrations])
+    for integration in integrations:
+        run('bash', str(ROOT / 'integration' / integration / 'build-deb.sh'),
+            env={**os.environ, 'RELAYFORGE_INTEGRATION_OUTPUT': str(output)})
     with tempfile.TemporaryDirectory(prefix='relayforge-deb-') as temporary:
         work = Path(temporary)
         payload = work / 'debian/relayforge'
@@ -144,6 +154,8 @@ def build(args):
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
         # Keep the imported snapshot intact; ship RelayForge's maintained tray.
         copy(payload, 'usr/lib/relayforge/settings/tray.py', ROOT / 'desktop/tray.py')
+        for name in ('main.py', 'device_info.py', 'adapter_limits.py'):
+            copy(payload, 'usr/lib/relayforge/settings/' + name, ROOT / 'desktop' / name)
         # GNOME Shell integration ships from the pinned vendor tree so the
         # first-login dispatcher can enable it; KDE and XFCE get the tray instead.
         extension = 'usr/share/gnome-shell/extensions/wifi-relay@3togo.github.io'
@@ -176,6 +188,8 @@ def build(args):
         dependencies += ['dbus', 'polkitd', 'network-manager', 'iw', 'iproute2',
                          'python3 (>= 3.10)', 'python3-gi', 'gir1.2-gtk-4.0', 'gir1.2-adw-1',
                          'gir1.2-gtk-3.0', 'gir1.2-ayatanaappindicator3-0.1']
+        dependencies += [f'{DESKTOP_PACKAGES[name][0]} (= {DESKTOP_PACKAGES[name][1]})'
+                         for name in integrations]
         if args.backend == 'create_ap':
             dependencies += ['hostapd', 'dnsmasq-base', 'iptables']
         size = sum(path.stat().st_size for path in payload.rglob('*') if path.is_file())
@@ -224,6 +238,8 @@ def main():
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'artifacts/deb')
     parser.add_argument('--force', action='store_true',
                         help='Replace an existing package of the same name atomically')
+    parser.add_argument('--desktop-integrations', choices=('none', 'nm-applet', 'gnome-settings', 'both'),
+                        default='none', help='Build matching patched desktop packages and require them at installation')
     args = parser.parse_args()
     try:
         build(args)

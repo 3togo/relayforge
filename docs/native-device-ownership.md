@@ -43,6 +43,12 @@ calls Disconnect, activates a profile or sets an upstream property. A running
 manager must discover the AP; a failed query is not treated as an absent service.
 The transaction confirms unmanaged state before allowing AP configuration.
 
+A newly created virtual AP is explicitly set unmanaged even if its first
+observation already says `Managed=false`. NetworkManager can publish that value
+during discovery, before automatically managing the device. Observing it alone
+does not establish a handoff. Existing unmanaged physical adapters retain their
+policy without an unnecessary write.
+
 The implementation uses the established writable `Managed` property to retain
 compatibility with older NetworkManager releases. Its changes are nonpersistent;
 NetworkManager 1.58 deprecates that setter in favor of the newer flag-bearing

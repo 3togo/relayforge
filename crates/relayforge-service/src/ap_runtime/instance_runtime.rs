@@ -432,6 +432,62 @@ fn inventory(dir: &Directory, fixture: bool) -> Result<Inventory> {
     current_directory(dir)?;
     Ok((files, control))
 }
+fn retire_control_socket(p: &Platform, dir: &Directory) -> Result<()> {
+    use std::os::unix::{fs::FileTypeExt, net::UnixDatagram};
+    // Called only after verify-cleanup proves all recorded daemons have exited.
+    // An interrupted hostapd can leave its filesystem socket behind.
+    daemons::check(p, dir)?;
+    let path = dir.path.join("hostapd_ctrl");
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err("Cannot inspect hostapd control directory"),
+        Ok(_) => {}
+    }
+    let control = Directory::open(&path)?;
+    let (data, _) = snapshot(p, dir)?;
+    let iface = &data.fields["WIFI_IFACE"];
+    interface_name(iface)?;
+    let held = PathBuf::from(format!("/proc/self/fd/{}", control.fd.as_raw_fd()));
+    let entries = fs::read_dir(&held)
+        .map_err(|_| "Cannot inspect control directory contents")?
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|_| "Cannot inspect control directory entry")?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+    if entries.len() != 1 || entries[0].file_name() != iface.as_str() {
+        return Err("Unknown hostapd control entries retained");
+    }
+    let socket = held.join(iface);
+    let before = fs::symlink_metadata(&socket)
+        .map_err(|_| "Cannot inspect hostapd control socket")?;
+    if !before.file_type().is_socket()
+        || before.uid() != unsafe { libc::geteuid() }
+        || before.nlink() != 1
+        || before.mode() & 0o002 != 0
+    {
+        return Err("Unsafe hostapd control entry retained");
+    }
+    let probe = UnixDatagram::unbound().map_err(|_| "Cannot probe control socket")?;
+    match probe.connect(&socket) {
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
+        _ => return Err("Live or unconfirmed hostapd control socket retained"),
+    }
+    current_directory(dir)?;
+    current_directory(&control)?;
+    let after = fs::symlink_metadata(&socket)
+        .map_err(|_| "Control socket disappeared before retirement")?;
+    if (before.dev(), before.ino(), before.mode(), before.uid(), before.nlink())
+        != (after.dev(), after.ino(), after.mode(), after.uid(), after.nlink())
+    {
+        return Err("Control socket changed before retirement");
+    }
+    let name = filename(iface)?;
+    if unsafe { libc::unlinkat(control.fd.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err("Cannot retire stale hostapd control socket");
+    }
+    control.fd.sync_all().map_err(|_| "Cannot sync control socket retirement")
+}
 async fn cleanup(p: &Platform, path: &Path) -> Result<()> {
     if completion::recover(p, path, false).await? {
         return Ok(());
@@ -461,6 +517,7 @@ async fn cleanup(p: &Platform, path: &Path) -> Result<()> {
     if let Some(error) = failure {
         return Err(error);
     }
+    retire_control_socket(p, &dir)?;
     completion::create(p, &dir).await
 }
 

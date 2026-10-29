@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import shutil
 import subprocess
 import unittest
@@ -48,6 +49,39 @@ def running(context,args,marker):
 
 
 class InstanceTests(unittest.TestCase):
+    def test_stale_owned_control_socket_is_removed_but_live_or_foreign_entries_are_retained(self):
+        for kind in ['stale','live','foreign','file','symlink']:
+            with self.subTest(kind=kind),bench() as c:
+                marker,_,args=prepare(c)
+                with running(c,args,marker) as process:
+                    directory=next((c.state/'engine').glob('create_ap.*.conf.*'))
+                    iface=json.loads((directory/'recovery.json').read_text())['fields']['WIFI_IFACE']
+                    control=directory/'hostapd_ctrl';control.mkdir(mode=0o700)
+                    target=control/('foreign' if kind=='foreign' else iface)
+                    listener=None
+                    if kind=='file':private(target,'keep')
+                    elif kind=='symlink':target.symlink_to(c.config)
+                    else:
+                        listener=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+                        fd=os.open(control,os.O_RDONLY|os.O_DIRECTORY)
+                        try:listener.bind(f'/proc/self/fd/{fd}/{target.name}')
+                        finally:os.close(fd)
+                        if kind!='live':listener.close();listener=None
+                    try:
+                        process.send_signal(signal.SIGUSR1);process.wait(8)
+                        if kind=='stale':
+                            self.assertEqual(process.returncode,0,process.stderr.read())
+                            self.assertFalse(directory.exists())
+                        else:
+                            self.assertNotEqual(process.returncode,0)
+                            self.assertTrue(target.is_symlink() or target.exists())
+                            if listener:listener.close();listener=None
+                            target.unlink()
+                            result=invoke(c,['--recover',str(directory)])
+                            self.assertEqual(result.returncode,0,result.stderr)
+                    finally:
+                        if listener:listener.close()
+
     def test_native_options_reject_unknown_repeated_missing_and_noncanonical_values(self):
         for change in ['unknown','duplicate','missing','value','channel']:
             with self.subTest(change=change),bench() as c:
