@@ -1,0 +1,36 @@
+#!/bin/sh
+# RelayForge post-install: reload systemd, enable (do not auto-start sharing),
+# restart on upgrade, and load the MAC profile in complain mode until enforcement
+# is validated. No sharing begins; the service stays inactive until an explicit Start.
+set -e
+
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] \
+    || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper unmask relayforge-native.service >/dev/null 2>&1 || true
+        deb-systemd-helper unmask relayforge-create-ap.service >/dev/null 2>&1 || true
+        # Respect an explicit administrator disable; otherwise enable so the
+        # service is available after boot (it remains inactive until started).
+        if ! deb-systemd-helper is-enabled relayforge-native.service >/dev/null 2>&1; then
+            deb-systemd-helper enable relayforge-native.service >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
+        # On upgrade, pick up a new binary only when the service was already running.
+        if [ -n "$2" ] && systemctl is-active --quiet relayforge-native.service; then
+            if command -v deb-systemd-invoke >/dev/null 2>&1; then
+                deb-systemd-invoke restart relayforge-native.service >/dev/null 2>&1 || true
+            else
+                systemctl restart relayforge-native.service >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+
+    # MAC: ship in complain mode so a too-strict profile cannot break the service
+    # before enforcement is validated against live hardware.
+    if command -v aa-complain >/dev/null 2>&1; then
+        aa-complain /usr/lib/relayforge/relayforge-service >/dev/null 2>&1 || true
+    fi
+fi

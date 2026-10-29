@@ -1,0 +1,37 @@
+# AppArmor profile for the RelayForge native service.
+#
+# Shipped with flags=(complain) and also loaded in complain mode by the package
+# postinst. A MAC profile must be validated against live hardware before it can
+# be enforced; complain mode records violations without blocking. Child daemon
+# transitions (hostapd/dnsmasq) are inherited for now and need dedicated child
+# profiles before enforcement.
+#include <tunables/global>
+
+profile /usr/lib/relayforge/relayforge-service flags=(complain) {
+  #include <abstractions/base>
+
+  capability net_admin,
+  capability net_raw,
+  capability net_bind_service,
+  capability sys_ptrace,
+
+  network inet,
+  network inet6,
+  network netlink,
+
+  /usr/lib/relayforge/relayforge-service mr,
+  /usr/lib/relayforge/** r,
+  /etc/relayforge/** rwk,
+  /run/relayforge/** rwk,
+  /run/dbus/system_bus_socket rw,
+  /run/systemd/notify w,
+  /proc/** r,
+  /sys/** r,
+
+  # The service re-executes itself to spawn gated child daemons, then exec's the
+  # AP daemons. Inherit for the relayforge child; unconfined for the third-party
+  # daemons until they get their own child profiles.
+  pix /usr/lib/relayforge/relayforge-service,
+  /usr/sbin/hostapd Ux,
+  /usr/sbin/dnsmasq Ux,
+}

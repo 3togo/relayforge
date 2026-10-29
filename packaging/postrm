@@ -1,0 +1,14 @@
+#!/bin/sh
+# RelayForge post-removal: forget the systemd unit and unload the MAC profile.
+set -e
+
+if [ "$1" = "purge" ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper purge relayforge-native.service >/dev/null 2>&1 || true
+        deb-systemd-helper unmask relayforge-native.service >/dev/null 2>&1 || true
+    fi
+    if command -v apparmor_parser >/dev/null 2>&1; then
+        apparmor_parser -R /etc/apparmor.d/usr.lib.relayforge.relayforge-service \
+            >/dev/null 2>&1 || true
+    fi
+fi

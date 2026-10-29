@@ -26,6 +26,20 @@ wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live
   man pages, `Recommends: xfce4-statusnotifier-plugin`. Both backends build
   lintian-clean.
 
+## 0.1.0 follow-up hardening (post-release)
+
+- **AppArmor (MAC)**: ship `packaging/apparmor/usr.lib.relayforge.relayforge-service`
+  and load it in complain mode from `postinst` until enforcement is validated
+  against live hardware. The profile is a conffile.
+- **install/upgrade/rollback**: add `postinst`/`prerm`/`postrm` that reload systemd,
+  enable (do not auto-start sharing) the unit, restart on upgrade only when already
+  running, and stop on removal.
+- **firewalld integration**: the firewall executor now routes the same owned iptables
+  rules through `firewall-cmd --direct --passthrough ipv4` when firewalld is active,
+  so distribution firewall policy is respected instead of being clobbered on the next
+  firewalld reload. No global firewalld rewrite is performed.
+- `tools/build-deb.py` packages the above and remains lintian-clean for both backends.
+
 ## Validation
 
 - `cargo test --workspace --locked`: 54 tests pass.
@@ -44,10 +58,12 @@ so downstream packagers are not surprised:
 
 - Automatic suspend/resume: an authorized request is retained through logind
   sleep, but live hardware validation is pending.
-- `dnsmasq` privilege dropping, mandatory access control (SELinux/AppArmor),
-  and DHCP/DNS/NAT policy integration.
-- Distribution firewall-policy integration (no global firewalld rewrite).
-- Install/upgrade/rollback and multiple-driver checks remain gates.
+- `dnsmasq` privilege dropping is implemented; DHCP/DNS/NAT policy integration
+  and SELinux remain pending. AppArmor ships in complain mode (enforcement pending).
+- Distribution firewall-policy integration: firewalld passthrough is integrated;
+  full policy integration (zones, permanent rules) remains pending.
+- Install/upgrade/rollback maintainer scripts are added; multi-driver and
+  cross-distro validation remain gates.
 - Legacy factory-password rotation and installer repair hooks are separate work.
 - Configuration migration requires explicit existing credentials; fresh
   credentials are random.

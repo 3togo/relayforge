@@ -127,6 +127,18 @@ def build(args):
                 with gzip.GzipFile(fileobj=handle, mode='wb', mtime=0) as archive:
                     archive.write(source.read_bytes())
             target.chmod(0o644)
+        # Maintainer scripts give clean install/upgrade/rollback behavior and
+        # load the MAC profile in complain mode.
+        for name in ('postinst', 'prerm', 'postrm'):
+            source = ROOT / 'packaging' / name
+            if source.exists():
+                put(payload, 'DEBIAN/' + name, source.read_text(), 0o755)
+        # Mandatory access control skeleton (AppArmor), enforced as complain.
+        apparmor = ROOT / 'packaging/apparmor'
+        if apparmor.is_dir():
+            for source in apparmor.iterdir():
+                if source.is_file():
+                    copy(payload, 'etc/apparmor.d/' + source.name, source)
         for source in (ROOT / 'vendor/wifi-relay/settings').rglob('*'):
             if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
@@ -148,7 +160,9 @@ def build(args):
              ROOT / 'packaging/relayforge-tray.desktop')
         copy(payload, 'etc/xdg/autostart/relayforge-tray.desktop',
              ROOT / 'packaging/relayforge-tray-autostart.desktop')
-        put(payload, 'DEBIAN/conffiles', '/etc/xdg/autostart/relayforge-tray.desktop\n')
+        put(payload, 'DEBIAN/conffiles',
+            '/etc/xdg/autostart/relayforge-tray.desktop\n'
+            '/etc/apparmor.d/usr.lib.relayforge.relayforge-service\n')
         copy(payload, 'usr/share/applications/io.github.erhanzeyrek.WifiHotspot.desktop',
              ROOT / 'vendor/wifi-relay/data/io.github.erhanzeyrek.WifiHotspot.desktop')
         copy(payload, 'usr/share/icons/hicolor/scalable/apps/io.github.erhanzeyrek.WifiHotspot.svg',

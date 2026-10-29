@@ -350,6 +350,44 @@ impl Directory {
 struct Firewall<'a> {
     platform: &'a Platform,
     data: &'a Snapshot,
+    firewalld: bool,
+}
+
+/// When firewalld owns the host firewall, raw iptables mutations are flushed on
+/// the next firewalld reload. Route the same owned rules through firewalld's
+/// direct passthrough so they are tracked by the distribution policy instead of
+/// being clobbered. This never performs a global firewalld rewrite.
+fn firewalld_active() -> bool {
+    for path in [
+        "/usr/bin/firewall-cmd",
+        "/usr/sbin/firewall-cmd",
+        "/bin/firewall-cmd",
+        "/sbin/firewall-cmd",
+    ] {
+        if let Ok(output) = std::process::Command::new(path)
+            .arg("--state")
+            .output()
+        {
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "running"
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Wrap iptables arguments so they are applied through firewalld's direct
+/// passthrough, keeping them under distribution firewall management.
+fn firewalld_passthrough(args: &[String]) -> Vec<String> {
+    let mut command = vec![
+        "--direct".into(),
+        "--passthrough".into(),
+        "ipv4".into(),
+    ];
+    command.extend(args.iter().cloned());
+    command
 }
 impl Firewall<'_> {
     fn permit_add(&self) -> Result<()> {
@@ -405,6 +443,33 @@ impl Executor for Firewall<'_> {
                     .clone(),
             });
         }
+        let environment = BTreeMap::from([
+            ("PATH".into(), "/usr/sbin:/usr/bin:/sbin:/bin".into()),
+            ("LC_ALL".into(), "C".into()),
+        ]);
+        if self.firewalld {
+            let program = [
+                "/usr/bin/firewall-cmd",
+                "/usr/sbin/firewall-cmd",
+                "/bin/firewall-cmd",
+                "/sbin/firewall-cmd",
+            ]
+            .into_iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .ok_or("firewall-cmd unavailable")?;
+            return radio::command_result(
+                program,
+                &firewalld_passthrough(args)
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                Duration::from_secs(4),
+                Some(&environment),
+            )
+            .await
+            .map_err(|_| "Firewall command failed or timed out");
+        }
         let program = [
             "/usr/sbin/iptables",
             "/usr/bin/iptables",
@@ -415,10 +480,6 @@ impl Executor for Firewall<'_> {
         .map(Path::new)
         .find(|p| p.is_file())
         .ok_or("iptables unavailable")?;
-        let environment = BTreeMap::from([
-            ("PATH".into(), "/usr/sbin:/usr/bin:/sbin:/bin".into()),
-            ("LC_ALL".into(), "C".into()),
-        ]);
         radio::command_result(
             program,
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -975,6 +1036,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             Firewall {
                 platform: p,
                 data: &data,
+                firewalld: firewalld_active(),
             }
             .permit_add()?;
             let plan = Plan::new(&data.fields)?;
@@ -985,6 +1047,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                     &mut Firewall {
                         platform: p,
                         data: &data,
+                        firewalld: firewalld_active(),
                     },
                 ),
             )
@@ -1000,6 +1063,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             let mut driver = Firewall {
                 platform: p,
                 data: &data,
+                firewalld: firewalld_active(),
             };
             tokio::time::timeout(Duration::from_secs(12), async {
                 if action == "firewall-remove" {
@@ -1072,6 +1136,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                 .verify(&mut Firewall {
                     platform: p,
                     data: &data,
+                    firewalld: firewalld_active(),
                 })
                 .await?;
             Ok(String::new())
@@ -1132,5 +1197,31 @@ mod tests {
         assert!(instance("create_ap.wlp2s0.conf.Ab123456"));
         assert!(!instance("create_ap.-unsafe.conf.Ab123456"));
         assert!(!instance("create_ap.wlp2s0.conf.Ab12345/"));
+    }
+    #[test]
+    fn firewalld_passthrough_wraps_owned_iptables_rules() {
+        let args = vec![
+            "-w".into(),
+            "2".into(),
+            "-t".into(),
+            "nat".into(),
+            "-I".into(),
+            "POSTROUTING".into(),
+        ];
+        let wrapped = firewalld_passthrough(&args);
+        assert_eq!(
+            wrapped,
+            vec![
+                "--direct".to_string(),
+                "--passthrough".to_string(),
+                "ipv4".to_string(),
+                "-w".to_string(),
+                "2".to_string(),
+                "-t".to_string(),
+                "nat".to_string(),
+                "-I".to_string(),
+                "POSTROUTING".to_string(),
+            ]
+        );
     }
 }

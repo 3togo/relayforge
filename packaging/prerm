@@ -1,0 +1,12 @@
+#!/bin/sh
+# RelayForge pre-removal: stop the service. Upgrade is handled by postinst, so we
+# only stop on remove/purge to avoid interrupting an in-flight upgrade.
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    if command -v deb-systemd-invoke >/dev/null 2>&1; then
+        deb-systemd-invoke stop relayforge-native.service >/dev/null 2>&1 || true
+    elif [ -d /run/systemd/system ]; then
+        systemctl stop relayforge-native.service >/dev/null 2>&1 || true
+    fi
+fi
