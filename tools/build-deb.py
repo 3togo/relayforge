@@ -117,8 +117,8 @@ def build(args):
         changelog = (
             f'relayforge ({version}) stable; urgency=medium\n'
             '\n'
-            '  * Harden firewall persistence (firewalld permanent rules) and AppArmor\n'
-            '    child confinement for hostapd/dnsmasq on top of 0.1.0.\n'
+            '  * Fix AP lifecycle and desktop hotspot integration; harden firewall\n'
+            '    persistence (firewalld permanent rules) and AppArmor child confinement.\n'
             '\n'
             f' -- RelayForge contributors <noreply@users.noreply.github.com>  {stamp}\n'
         )

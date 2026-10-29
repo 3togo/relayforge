@@ -1,11 +1,11 @@
-# RelayForge 0.1.1 (2026-10-29)
+# RelayForge 0.1.2 (2026-10-30)
 
-0.1.1 adds packaging hardening on top of the 0.1.0 native release: AppArmor
-confinement, install/upgrade/rollback maintainer scripts, and firewalld
-integration (including permanent owned rules).
+0.1.2 folds the AP lifecycle and desktop hotspot integration fixes into the 0.1.1
+packaging hardening (AppArmor confinement, install/upgrade/rollback maintainer
+scripts, and firewalld integration including permanent owned rules).
 
-Initial native release of RelayForge, a Linux Wi-Fi sharing tool that turns a
-wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live.
+RelayForge is a Linux Wi-Fi sharing tool that turns a wireless adapter into a
+hotspot while keeping the upstream Wi-Fi connection live.
 
 ## What ships
 
@@ -29,6 +29,20 @@ wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live
 - Debian packaging (`tools/build-deb.py`): stripped ELF, gzipped changelog and
   man pages, `Recommends: xfce4-statusnotifier-plugin`. Both backends build
   lintian-clean.
+
+## 0.1.2
+
+- **AP lifecycle**: fix activation/teardown sequencing in `ap_runtime` and
+  `instance_runtime`, with device and network state handling corrected in
+  `network.rs`/`devices.rs`.
+- **Desktop hotspot integration**: add `desktop/main.py`, `device_info.py` and
+  `adapter_limits.py`, and rework `tray.py` around them.
+- **Pinned integration tree**: add `integration/` (nm-applet and gnome-settings
+  patches) plus `tools/minimize-integrations.py`.
+- **Vendor whitespace**: preserve upstream whitespace attributes alongside the
+  integration patches.
+- Deb packaging test now asserts the shipped `postinst`/`prerm`/`postrm` are
+  present, executable and syntactically valid.
 
 ## 0.1.1 hardening
 
