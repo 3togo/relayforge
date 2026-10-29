@@ -99,7 +99,19 @@ class DebPackagingTests(unittest.TestCase):
                 self.assertIn('/etc/xdg/autostart/relayforge-tray.desktop',
                               (payload / 'DEBIAN/conffiles').read_text().splitlines())
                 self.assertFalse((payload / 'etc/wifi-hotspot.conf').exists())
-                self.assertFalse((payload / 'DEBIAN/postinst').exists())
+                # Maintainer scripts give clean install/upgrade/rollback: postinst
+                # enables the unit and loads the MAC profile in complain mode, prerm
+                # stops it, postrm purges and unloads the profile. Every optional
+                # helper stays guarded by `command -v` so a missing tool is harmless.
+                for script in ('postinst', 'prerm', 'postrm'):
+                    script_path = payload / 'DEBIAN' / script
+                    self.assertTrue(script_path.exists())
+                    self.assertEqual(script_path.stat().st_mode & 0o777, 0o755)
+                    subprocess.run(['sh', '-n', str(script_path)], check=True)
+                postinst = (payload / 'DEBIAN/postinst').read_text()
+                self.assertIn('deb-systemd-helper', postinst)
+                self.assertIn('aa-complain', postinst)
+                self.assertIn('command -v', postinst)
                 # The first-login dispatcher ships beside the extension it enables.
                 shipped = {path.name for path in (payload / 'usr/lib/relayforge/settings').rglob('*')
                            if path.is_file()}
