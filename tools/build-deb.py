@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from datetime import datetime, timezone
+import gzip
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,6 +86,15 @@ def build(args):
         staging.stage(binary, payload, args.backend)
         payload.chmod(0o755)
         (payload / 'manifest.json').unlink()
+        service_binary = payload / 'usr/lib/relayforge/relayforge-service'
+        # Ship a stripped ELF; an unstripped object fails the Debian archive gate.
+        if shutil.which('strip'):
+            run('strip', str(service_binary))
+            native_helper = payload / 'usr/lib/relayforge/native/create_ap'
+            if native_helper.exists():
+                run('strip', str(native_helper))
+        else:
+            print('warning: strip not found; binary left unstripped', file=sys.stderr)
         doc = 'usr/share/doc/relayforge/'
         for name in ('README.md', 'THIRD_PARTY.md'):
             copy(payload, doc + name, ROOT / name)
@@ -91,6 +102,31 @@ def build(args):
         for source in (ROOT / 'vendor/wifi-relay/packaging/licenses').iterdir():
             if source.is_file():
                 copy(payload, doc + 'licenses/' + source.name, source)
+        # Native Debian packages must ship a gzipped changelog.
+        stamp = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S %z')
+        changelog = (
+            f'relayforge ({version}) stable; urgency=medium\n'
+            '\n'
+            '  * Initial native Wi-Fi sharing release with GTK settings, tray, and\n'
+            '    GNOME Shell integration.\n'
+            '\n'
+            f' -- RelayForge contributors <noreply@users.noreply.github.com>  {stamp}\n'
+        )
+        with open(payload / (doc + 'changelog.gz'), 'wb') as handle:
+            with gzip.GzipFile(fileobj=handle, mode='wb', mtime=0) as archive:
+                archive.write(changelog.encode())
+        (payload / (doc + 'changelog.gz')).chmod(0o644)
+        # Man pages silence the no-manual-page lint and document the entry points.
+        # Debian expects them compressed, so ship .gz.
+        for name in ('wifi-hotspot-settings.1', 'wifi-hotspot-tray.1',
+                     'wifi-hotspot-enable-extension.1'):
+            source = ROOT / 'packaging/man' / name
+            target = payload / ('usr/share/man/man1/' + name + '.gz')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, 'wb') as handle:
+                with gzip.GzipFile(fileobj=handle, mode='wb', mtime=0) as archive:
+                    archive.write(source.read_bytes())
+            target.chmod(0o644)
         for source in (ROOT / 'vendor/wifi-relay/settings').rglob('*'):
             if source.is_file() and '__pycache__' not in source.parts and source.suffix != '.pyc':
                 copy(payload, 'usr/lib/relayforge/settings/' + str(source.relative_to(ROOT / 'vendor/wifi-relay/settings')), source)
