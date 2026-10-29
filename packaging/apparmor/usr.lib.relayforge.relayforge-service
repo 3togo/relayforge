@@ -2,9 +2,12 @@
 #
 # Shipped with flags=(complain) and also loaded in complain mode by the package
 # postinst. A MAC profile must be validated against live hardware before it can
-# be enforced; complain mode records violations without blocking. Child daemon
-# transitions (hostapd/dnsmasq) are inherited for now and need dedicated child
-# profiles before enforcement.
+# be enforced; complain mode records violations without blocking.
+#
+# The service re-executes itself to spawn gated child daemons, then exec's the
+# AP daemons hostapd and dnsmasq. Those now transition into dedicated child
+# profiles (still complain) so enforcement can be enabled once the child access
+# patterns are confirmed against live hardware.
 #include <tunables/global>
 
 profile /usr/lib/relayforge/relayforge-service flags=(complain) {
@@ -29,9 +32,49 @@ profile /usr/lib/relayforge/relayforge-service flags=(complain) {
   /sys/** r,
 
   # The service re-executes itself to spawn gated child daemons, then exec's the
-  # AP daemons. Inherit for the relayforge child; unconfined for the third-party
-  # daemons until they get their own child profiles.
+  # third-party AP daemons. Keep the relayforge child transition; confine the
+  # AP daemons through dedicated child profiles.
   pix /usr/lib/relayforge/relayforge-service,
-  /usr/sbin/hostapd Ux,
-  /usr/sbin/dnsmasq Ux,
+  /usr/sbin/hostapd Px -> hostapd,
+  /usr/sbin/dnsmasq Px -> dnsmasq,
+
+  profile hostapd flags=(complain) {
+    #include <abstractions/base>
+
+    capability net_admin,
+    capability net_raw,
+    capability net_bind_service,
+    capability setuid,
+    capability setgid,
+
+    network inet,
+    network inet6,
+
+    /usr/sbin/hostapd mr,
+    /usr/lib/relayforge/** r,
+    /etc/relayforge/** rwk,
+    /run/relayforge/** rwk,
+    /run/systemd/notify w,
+    /proc/** r,
+    /sys/** r,
+  }
+
+  profile dnsmasq flags=(complain) {
+    #include <abstractions/base>
+
+    capability net_bind_service,
+    capability net_admin,
+    capability setuid,
+    capability setgid,
+
+    network inet,
+    network inet6,
+
+    /usr/sbin/dnsmasq mr,
+    /usr/lib/relayforge/** r,
+    /etc/relayforge/** rwk,
+    /run/relayforge/** rwk,
+    /proc/** r,
+    /sys/** r,
+  }
 }

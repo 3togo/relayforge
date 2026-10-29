@@ -37,7 +37,13 @@ wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live
 - **firewalld integration**: the firewall executor now routes the same owned iptables
   rules through `firewall-cmd --direct --passthrough ipv4` when firewalld is active,
   so distribution firewall policy is respected instead of being clobbered on the next
-  firewalld reload. No global firewalld rewrite is performed.
+  firewalld reload. Owned rules are also written to firewalld's **permanent** direct
+  passthrough (best-effort; the runtime rule stays authoritative) so they survive a
+  firewalld reload instead of being flushed. No global firewalld rewrite is performed.
+- **AppArmor child profiles**: the service profile now defines dedicated `hostapd` and
+  `dnsmasq` child profiles (still `flags=(complain)`) and transitions the spawned AP
+  daemons into them via `Px`, replacing the earlier `Ux` (unconfined) transitions. This
+  closes the child-daemon gap noted in the profile header and prepares for enforcement.
 - `tools/build-deb.py` packages the above and remains lintian-clean for both backends.
 
 ## Validation
@@ -59,9 +65,10 @@ so downstream packagers are not surprised:
 - Automatic suspend/resume: an authorized request is retained through logind
   sleep, but live hardware validation is pending.
 - `dnsmasq` privilege dropping is implemented; DHCP/DNS/NAT policy integration
-  and SELinux remain pending. AppArmor ships in complain mode (enforcement pending).
-- Distribution firewall-policy integration: firewalld passthrough is integrated;
-  full policy integration (zones, permanent rules) remains pending.
+  and SELinux remain pending. AppArmor ships in complain mode with confined
+  `hostapd`/`dnsmasq` child profiles (enforcement pending).
+- Distribution firewall-policy integration: firewalld passthrough **and** permanent
+  owned rules are integrated; dedicated firewalld zones remain pending.
 - Install/upgrade/rollback maintainer scripts are added; multi-driver and
   cross-distro validation remain gates.
 - Legacy factory-password rotation and installer repair hooks are separate work.

@@ -389,6 +389,20 @@ fn firewalld_passthrough(args: &[String]) -> Vec<String> {
     command.extend(args.iter().cloned());
     command
 }
+
+/// Same as `firewalld_passthrough`, but recorded in firewalld's permanent
+/// configuration so the owned rules survive a daemon reload instead of being
+/// flushed together with the runtime rules.
+fn firewalld_passthrough_permanent(args: &[String]) -> Vec<String> {
+    let mut command = vec![
+        "--permanent".into(),
+        "--direct".into(),
+        "--passthrough".into(),
+        "ipv4".into(),
+    ];
+    command.extend(args.iter().cloned());
+    command
+}
 impl Firewall<'_> {
     fn permit_add(&self) -> Result<()> {
         if self.data.owner.current()?.is_none() {
@@ -458,6 +472,22 @@ impl Executor for Firewall<'_> {
             .map(Path::new)
             .find(|p| p.is_file())
             .ok_or("firewall-cmd unavailable")?;
+            // Persist owned rules across firewalld reloads. The runtime passthrough
+            // is authoritative for the live hotspot; the permanent copy is applied
+            // best-effort so a duplicate or unsupported permanent insert never
+            // breaks the running rule.
+            if matches!(operation, Some("-I") | Some("-D")) {
+                let _ = radio::command_result(
+                    program,
+                    &firewalld_passthrough_permanent(args)
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    Duration::from_secs(4),
+                    Some(&environment),
+                )
+                .await;
+            }
             return radio::command_result(
                 program,
                 &firewalld_passthrough(args)
@@ -1212,6 +1242,32 @@ mod tests {
         assert_eq!(
             wrapped,
             vec![
+                "--direct".to_string(),
+                "--passthrough".to_string(),
+                "ipv4".to_string(),
+                "-w".to_string(),
+                "2".to_string(),
+                "-t".to_string(),
+                "nat".to_string(),
+                "-I".to_string(),
+                "POSTROUTING".to_string(),
+            ]
+        );
+    }
+    #[test]
+    fn firewalld_passthrough_permanent_prepends_permanent_flag() {
+        let args = vec![
+            "-w".into(),
+            "2".into(),
+            "-t".into(),
+            "nat".into(),
+            "-I".into(),
+            "POSTROUTING".into(),
+        ];
+        assert_eq!(
+            firewalld_passthrough_permanent(&args),
+            vec![
+                "--permanent".to_string(),
                 "--direct".to_string(),
                 "--passthrough".to_string(),
                 "ipv4".to_string(),
