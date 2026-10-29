@@ -85,7 +85,7 @@ user from the repository root:
 ```sh
 ./tools/build-deb.sh
 # Alternative native backend:
-./tools/build-deb.sh --backend create_ap --version 0.1.0~preview1
+./tools/build-deb.sh --backend create_ap --version 0.1.1~preview1
 ```
 
 The script builds the locked release executable and writes a `.deb` under

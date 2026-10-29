@@ -1,4 +1,8 @@
-# RelayForge 0.1.0 (2026-10-29)
+# RelayForge 0.1.1 (2026-10-29)
+
+0.1.1 adds packaging hardening on top of the 0.1.0 native release: AppArmor
+confinement, install/upgrade/rollback maintainer scripts, and firewalld
+integration (including permanent owned rules).
 
 Initial native release of RelayForge, a Linux Wi-Fi sharing tool that turns a
 wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live.
@@ -26,7 +30,7 @@ wireless adapter into a hotspot while keeping the upstream Wi-Fi connection live
   man pages, `Recommends: xfce4-statusnotifier-plugin`. Both backends build
   lintian-clean.
 
-## 0.1.0 follow-up hardening (post-release)
+## 0.1.1 hardening
 
 - **AppArmor (MAC)**: ship `packaging/apparmor/usr.lib.relayforge.relayforge-service`
   and load it in complain mode from `postinst` until enforcement is validated

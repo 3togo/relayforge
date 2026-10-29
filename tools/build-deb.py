@@ -107,8 +107,8 @@ def build(args):
         changelog = (
             f'relayforge ({version}) stable; urgency=medium\n'
             '\n'
-            '  * Initial native Wi-Fi sharing release with GTK settings, tray, and\n'
-            '    GNOME Shell integration.\n'
+            '  * Harden firewall persistence (firewalld permanent rules) and AppArmor\n'
+            '    child confinement for hostapd/dnsmasq on top of 0.1.0.\n'
             '\n'
             f' -- RelayForge contributors <noreply@users.noreply.github.com>  {stamp}\n'
         )
