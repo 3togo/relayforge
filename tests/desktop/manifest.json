@@ -1,0 +1,54 @@
+{
+  "repository": "https://github.com/3togo/gnome-wifi-hotspot",
+  "revision": "12f9f78e2cf4e9f41abacf94fbf5f5524bf47814",
+  "files": {
+    "tests/desktop/test_settings_interfaces.py": {
+      "source": "tests/test_settings_interfaces.py",
+      "source_sha256": "f7cf32aa6d4cd5b2f178102bfa3d59980791d2753763745b36ecc57929fc7cf1",
+      "sha256": "1c58c8f496ea8991c642fac7a9ef0435f69f4b62b5ec970105eeff04522ff30c",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_settings_launcher.py": {
+      "source": "tests/test_settings_launcher.py",
+      "source_sha256": "a6cb112660f64657a22a7bd186dde3f38d4707d54777a631b233281168aedc35",
+      "sha256": "a6cb112660f64657a22a7bd186dde3f38d4707d54777a631b233281168aedc35",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_wifi_qr.py": {
+      "source": "tests/test_wifi_qr.py",
+      "source_sha256": "c53acb420bdb480756692b61acd0e62d8ea20579e2c6968ac97918ddd37c39fa",
+      "sha256": "c53acb420bdb480756692b61acd0e62d8ea20579e2c6968ac97918ddd37c39fa",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_startup_preference.py": {
+      "source": "tests/test_startup_preference.py",
+      "source_sha256": "916ac24d7fd4cc84c6bd3b862f655d805ae73e1e0ca2d2c587aa3ca2c92c6fdc",
+      "sha256": "916ac24d7fd4cc84c6bd3b862f655d805ae73e1e0ca2d2c587aa3ca2c92c6fdc",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_preferences_lifecycle.py": {
+      "source": "tests/test_preferences_lifecycle.py",
+      "source_sha256": "daa5e27a70bc7489dca97ee89ce72aab540a58088a105c55c865fa15e2e8a629",
+      "sha256": "daa5e27a70bc7489dca97ee89ce72aab540a58088a105c55c865fa15e2e8a629",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_tray_visibility.py": {
+      "source": "tests/test_tray_visibility.py",
+      "source_sha256": "b5766edc87c92364cdd5edc032c7eff35013072ce4ed9171a7d33dc9cb8b4b23",
+      "sha256": "460c4f3ba2b5df6c7682bc66fe1757db141652133670bd457cd7b60db8f097a0",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_extension_autostart.py": {
+      "source": "tests/test_extension_autostart.py",
+      "source_sha256": "d1f304dd002c7cc474881a5ff2a9d3d324e0c9c56cc558f206e907e849648611",
+      "sha256": "72148304c84f3645cf4bfdf0980ad63492d1283cb2d164f93d5ef72521bf39d6",
+      "adaptation": "Resolve retained settings and extension sources from the pinned vendor snapshot"
+    },
+    "tests/desktop/test_tray.mjs": {
+      "source": "tests/test_tray.mjs",
+      "source_sha256": "ddd96b35ba3672ca2ef3b1ae2ce7fd1d09c0dc0ac8ed48ed1180c4f11d05ea9a",
+      "sha256": "be28c6dd9454be9c32133362335b041dec38fa95bb0048a73bd1d34a23933a75",
+      "adaptation": "Exercise the maintained GNOME controller and add persistent failure/guidance checks"
+    }
+  }
+}

@@ -27,6 +27,11 @@ class Bench:
         self.radio.write_text(json.dumps(radio))
         (self.state/'live-radio.json').write_text(json.dumps(radio))
         (self.state/'live-radio.json').chmod(0o600)
+        (self.state/'radio-module').write_text('test_driver')
+        (self.state/'radio-module').chmod(0o600)
+        policy=self.state/'policy-state.json'
+        policy.write_text(json.dumps(dict(firewalld_active=False,regulatory='phy#0\ncountry 00: DFS-UNSET\n(2402 - 2472 @ 40), (N/A, 20), (N/A)\n')))
+        policy.chmod(0o600)
         self.config=self.root/'config'
         self.config.write_text('BACKEND=create_ap\nWIFI_IFACE=demo0\nINTERNET_IFACE=demo0\nSSID=Native AP\nPASSPHRASE=supervisor-secret-not-in-argv\n')
         self.config.chmod(0o600)
@@ -85,6 +90,67 @@ def bench(**options):
 
 
 class CreateApTests(unittest.TestCase):
+    def test_driver_preflight_explains_refusal_before_any_helper_or_journal(self):
+        for module,reason in [('brcmfmac','dedicated adapter'),('8192cu','rtl871xdrv'),
+                              ('8723ae','rtl871xdrv'),('../driver','Invalid radio driver')]:
+            with self.subTest(module=module),bench() as context,context.service() as (bus,_):
+                path=context.state/'radio-module';path.write_text(module)
+                caps=decode_reply('GetCapabilities',call(bus,'GetCapabilities'))
+                self.assertFalse(caps['startup_preflight']['success'])
+                self.assertIn(reason,caps['startup_preflight']['error'])
+                result=decode_reply('Start',call(bus,'Start'))
+                self.assertFalse(result['success']);self.assertIn(reason,result['error'])
+                self.assertIsNone(context.launched());context.clean(self)
+
+    def test_driver_observation_failures_and_late_changes_cannot_launch(self):
+        for change in ['missing','public','symlink','late']:
+            with self.subTest(change=change),bench() as context,context.service() as (bus,_):
+                caps=decode_reply('GetCapabilities',call(bus,'GetCapabilities'))
+                self.assertTrue(caps['startup_preflight']['success'])
+                self.assertEqual(caps['native_driver']['hostapd_interface'],'nl80211')
+                path=context.state/'radio-module'
+                if change=='missing':path.unlink()
+                elif change=='public':path.chmod(0o644)
+                elif change=='symlink':path.rename(context.state/'original-module');path.symlink_to(context.state/'original-module')
+                else:path.write_text('8192du')
+                result=decode_reply('Start',call(bus,'Start'))
+                self.assertFalse(result['success']);self.assertIsNone(context.launched());context.clean(self)
+
+    def test_raw_psk_wpa3_is_refused_without_secret_exposure_or_config_rewrite(self):
+        with bench() as context:
+            secret='b'*64
+            context.config.write_text(context.config.read_text()+'WPA_VERSION=3\nUSE_PSK=1\nPASSPHRASE='+secret+'\n')
+            original=context.config.read_bytes()
+            with context.service() as (bus,_):
+                caps=decode_reply('GetCapabilities',call(bus,'GetCapabilities'))
+                self.assertFalse(caps['startup_preflight']['success'])
+                self.assertIn('passphrase for SAE',caps['startup_preflight']['error'])
+                result=decode_reply('Start',call(bus,'Start'))
+                self.assertFalse(result['success']);self.assertIn('passphrase for SAE',result['error'])
+                self.assertNotIn(secret,json.dumps(caps)+json.dumps(result))
+                self.assertEqual(context.config.read_bytes(),original)
+                self.assertIsNone(context.launched());context.clean(self)
+
+    def test_security_capabilities_label_transition_mode_without_exposing_secrets(self):
+        for version,mode,pmf in [('1','wpa1-personal',0),('2','wpa2-personal',0),('3','wpa2-wpa3-transition',1)]:
+            with self.subTest(version=version),bench() as context:
+                context.config.write_text(context.config.read_text()+'WPA_VERSION='+version+'\n')
+                with context.service() as (bus,_):
+                    caps=decode_reply('GetCapabilities',call(bus,'GetCapabilities'))
+                    self.assertTrue(caps['startup_preflight']['success'])
+                    self.assertEqual(caps['native_security']['mode'],mode)
+                    self.assertEqual(caps['native_security']['protected_management_frames'],pmf)
+                    self.assertNotIn('supervisor-secret',json.dumps(caps))
+
+    def test_capabilities_explain_native_bridge_refusal_without_launching_helper(self):
+        with bench() as context, context.service() as (bus, _):
+            self.assertTrue(decode_reply('SetConfig', call(bus, 'SetConfig',
+                GLib.Variant('(s)', ('{"SHARE_METHOD":"bridge"}',)))))
+            capabilities = decode_reply('GetCapabilities', call(bus, 'GetCapabilities'))
+            self.assertFalse(capabilities['startup_preflight']['success'])
+            self.assertIn('bridge mode', capabilities['startup_preflight']['error'])
+            self.assertIsNone(context.launched())
+
     def test_readiness_clients_idempotency_and_secret_free_ownership(self):
         with bench(client=True,foreign=True) as context,context.service() as (bus,_):
             started=decode_reply('Start',call(bus,'Start'))
@@ -271,7 +337,7 @@ class CreateApTests(unittest.TestCase):
                 self.assertEqual(process.wait(5),0)
             context.clean(self)
 
-    def test_start_rejects_upstream_band_switch_and_country_override_without_execution(self):
+    def test_start_rejects_upstream_switch_and_unprovisioned_country_without_execution(self):
         for patch in ({'FREQ_BAND':'5'},{'COUNTRY':'US'},{'SHARE_METHOD':'bridge'},{'NO_VIRT':'1'}):
             with self.subTest(patch=patch),bench() as context,context.service() as (bus,_):
                 self.assertTrue(decode_reply('SetConfig',call(bus,'SetConfig',GLib.Variant('(s)',(json.dumps(patch),)))))

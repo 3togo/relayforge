@@ -15,7 +15,7 @@ name='org.freedesktop.systemd1';path='/org/freedesktop/systemd1';interface=name+
 units=['wifi-hotspot-daemon.service','relayforge.service','relayforge-native.service','relayforge-create-ap.service']
 paths={u:path+'/unit/u'+str(i) for i,u in enumerate(units)}
 bus=Gio.DBusConnection.new_for_address_sync(os.environ['DBUS_SESSION_BUS_ADDRESS'],Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT|Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,None,None)
-process=None;active=None;lock=None;failed=set();events=[];jobs=0
+process=None;active=None;lock=None;failed=set();events=[];jobs=0;pending_job=None
 def control():
     try:return json.loads((base/'manager-control.json').read_text())
     except FileNotFoundError:return {}
@@ -56,12 +56,22 @@ def rows():
     if process and process.poll() is not None:
         failed.add(active)
         if lock:lock.close();lock=None
-    return [(u,u,'loaded' if unitfile(u).exists() or u in masks() else 'not-found',
+    result = [(u,u,'loaded' if unitfile(u).exists() or u in masks() else 'not-found',
              'failed' if u in failed else 'active' if active==u else 'inactive',
              'running' if active==u else 'dead','',paths[u],1 if control().get('job') and active==u else 0,'','/') for u in units]
+    if pending_job:
+        unit,method=pending_job
+        index=units.index(unit);row=list(result[index])
+        row[3]='activating' if method=='StartUnit' else 'deactivating'
+        row[7]=jobs;row[8]='start' if method=='StartUnit' else 'stop'
+        result[index]=tuple(row)
+    if control().get('unexpected_job'):
+        row=list(result[0]);row[3]='activating';row[7]=99;row[8]='start'
+        result[0]=tuple(row)
+    return result
 def reply(invocation,signature,values):invocation.return_value(GLib.Variant(signature,values))
 def dispatch(_bus,_sender,obj,iface,method,params,invocation):
-    global jobs
+    global jobs,pending_job
     args=params.unpack()
     try:
         if method in control().get('fail',[]):raise RuntimeError('Injected manager failure')
@@ -105,9 +115,20 @@ def dispatch(_bus,_sender,obj,iface,method,params,invocation):
         elif method=='Reload':reply(invocation,'()',())
         elif method in ['StopUnit','StartUnit']:
             u,mode=args;assert u in units and mode=='fail'
-            if method=='StopUnit':stop(u)
-            else:launch(u)
             jobs+=1
+            if control().get('hold_job')==method:
+                assert pending_job is None
+                pending_job=(u,method)
+                def finish():
+                    global pending_job
+                    if control().get('hold_job')==method:return True
+                    if method=='StopUnit':stop(u)
+                    else:launch(u)
+                    pending_job=None
+                    return False
+                GLib.timeout_add(20,finish)
+            elif method=='StopUnit':stop(u)
+            else:launch(u)
             if control().get('lost_reply')==method:raise RuntimeError('Side effect happened before lost reply')
             reply(invocation,'(o)',(path+'/job/j'+str(jobs),))
         else:raise RuntimeError('Unexpected manager method')

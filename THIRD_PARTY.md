@@ -13,12 +13,8 @@ The Wi-Fi Relay snapshot is derived from Erhan Zeyrek's GNOME Wi-Fi Hotspot and
 The copied Debian copyright inventory is retained as provenance under
 vendor/wifi-relay/packaging/licenses/copyright. Its integration entries describe
 the upstream project; no NetworkManager, applet, or GNOME Settings integration
-patches are included in that pinned snapshot. Separate maintained applet and
-GNOME Settings integrations now live in `integration/`, derived from Wi-Fi Relay
-revision `12f9f78e2cf4e9f41abacf94fbf5f5524bf47814`. They are copyright 2026
-Wi-Fi Relay contributors, licensed GPL-2.0-or-later; see `integration/COPYING`.
-The dependency-minimization helper in `tools/minimize-integrations.py` comes from
-the same revision under the upstream MIT license. Cargo.lock identifies Rust dependencies;
+patches are included in the vendor snapshot. Separate reviewed integration imports
+are described below. Cargo.lock identifies Rust dependencies;
 their individual licenses remain applicable.
 
 Native configuration validation uses unicode-general-category 1.1.0
@@ -33,10 +29,22 @@ source and notices remain in the vendor tree. New native staging copies only
 the Rust ELF service/helper and policy files; it no longer ships a derived Bash
 script. Compatibility mode retains the original vendor backend and its notices.
 
-`desktop/tray.py` adapts the MIT-licensed pinned Wi-Fi Relay tray for RelayForge.
+`desktop/tray.py`, `desktop/main.py` and `desktop/extension.js` adapt the
+MIT-licensed pinned Wi-Fi Relay desktop controls for RelayForge.
 The original notice remains in LICENSE and the unmodified source remains under
 `vendor/wifi-relay/settings/tray.py`.
 
 `desktop/main.py` similarly adapts the pinned MIT-licensed settings window,
 adding descriptive device selectors. Its original remains under
 `vendor/wifi-relay/settings/main.py`.
+
+Optional downstream applet and GNOME Settings integrations under `integration/`
+are GPL-2.0-or-later; the NetworkManager patch also includes LGPL-2.1-or-later
+code. Their source revisions, hashes, adaptations and licenses are recorded in
+`integration/manifest.json`, `integration/README.md` and `integration/licenses/`.
+They are separate from the MIT Rust service and are not installed by its package.
+
+The retained desktop regression sources under `tests/desktop/` have import
+provenance in their manifest. `compat/factory.conf` is the exact MIT-licensed
+factory template from the same pinned Wi-Fi Relay revision; it is migration
+comparison data, never a credential fallback for a running service.

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.erhanzeyrek.WifiHotspot</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>RelayForge</name>
+  <summary>Configure Linux Wi-Fi sharing</summary>
+  <description>
+    <p>Configure a native Wi-Fi sharing service, inspect connected clients and share connection details using a QR code. Optional tray and GNOME Shell controls show status and failure guidance.</p>
+    <p>Sharing requires compatible radio hardware and an explicitly initialized configuration. Available features depend on the selected backend. Existing-bridge sharing and explicit upstream band switching are experimental and require administrator opt-in. Automatic upstream band switching and migration to a new bridge are unavailable.</p>
+  </description>
+  <launchable type="desktop-id">io.github.erhanzeyrek.WifiHotspot.desktop</launchable>
+  <developer id="io.github.3togo"><name>RelayForge contributors</name></developer>
+  <url type="homepage">https://github.com/3togo/relayforge</url>
+  <url type="bugtracker">https://github.com/3togo/relayforge/issues</url>
+  <url type="vcs-browser">https://github.com/3togo/relayforge</url>
+  <provides><binary>wifi-hotspot-settings</binary></provides>
+  <categories><category>Network</category><category>Settings</category></categories>
+  <content_rating type="oars-1.1"/>
+</component>

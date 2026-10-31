@@ -1,4 +1,5 @@
 //! Desktop-independent lifecycle and compatibility protocol. No I/O or credentials in state.
+pub mod ap_policy;
 pub mod config;
 pub mod radio;
 pub mod subnet;
@@ -8,6 +9,7 @@ use serde_json::Value;
 
 pub const BUS_NAME: &str = "io.github.erhanzeyrek.WifiHotspot";
 pub const OBJECT_PATH: &str = "/io/github/erhanzeyrek/WifiHotspot";
+pub const CONTROL_ACTION: &str = "io.github.erhanzeyrek.WifiHotspot.control";
 pub const MANAGE_ACTION: &str = "io.github.erhanzeyrek.WifiHotspot.manage";
 /// Reading or rewriting the stored configuration, which holds the password.
 /// Kept separate from routine operation so a process in the desktop session
@@ -33,10 +35,9 @@ impl Method {
     /// The Polkit action required to call this method, if any.
     pub fn action(self) -> Option<&'static str> {
         match self {
-            Self::GetConfig | Self::SetConfig => Some(CREDENTIALS_ACTION),
-            Self::Start | Self::Stop | Self::SwitchBandAndReconnect | Self::PrepareFirewall => {
-                Some(MANAGE_ACTION)
-            }
+            Self::GetConfig | Self::SetConfig => Some(MANAGE_ACTION),
+            Self::Start | Self::Stop => Some(CONTROL_ACTION),
+            Self::SwitchBandAndReconnect | Self::PrepareFirewall => Some(MANAGE_ACTION),
             Self::GetStatus | Self::GetClients | Self::GetInterfaces | Self::GetCapabilities => None,
         }
     }
@@ -297,15 +298,16 @@ mod tests {
         // Reading or rewriting the configuration exposes the hotspot password, so it
         // must never share the prompt-free action used for Start/Stop.
         for method in [Method::GetConfig, Method::SetConfig] {
-            assert_eq!(method.action(), Some(CREDENTIALS_ACTION), "{method:?}");
+            assert_eq!(method.action(), Some(MANAGE_ACTION), "{method:?}");
         }
         for method in [
-            Method::Start,
-            Method::Stop,
             Method::SwitchBandAndReconnect,
             Method::PrepareFirewall,
         ] {
             assert_eq!(method.action(), Some(MANAGE_ACTION), "{method:?}");
+        }
+        for method in [Method::Start, Method::Stop] {
+            assert_eq!(method.action(), Some(CONTROL_ACTION), "{method:?}");
         }
         for method in [
             Method::GetStatus,

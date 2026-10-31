@@ -374,6 +374,8 @@ class HotspotTray(Gtk.Application):
             self._error(str(error))
 
     def _operation_error(self, message):
+        if 'AccessDenied' in message:
+            message += '\nUse an active local desktop session or ask an administrator to review the RelayForge policy. The tray never requests an administrator password.'
         self.request_error = message
         self._error(message)
 

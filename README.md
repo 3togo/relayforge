@@ -4,6 +4,10 @@ A Rust core for Linux Wi-Fi sharing, with the existing Wi-Fi Relay GTK settings,
 GNOME Shell extension and tray controls. The name is a working suggestion, not a
 claim of name or trademark availability.
 
+The [feature inventory](docs/feature-parity-matrix.md) and
+[ordered implementation plan](docs/feature-parity-plan.md) track retained behavior,
+native gaps and separate hardware/release gates.
+
 This is an early migration project. Rust owns the desktop D-Bus service,
 authorization, configuration and credential storage, interface/radio inspection,
 lifecycle intent and status snapshots. The opt-in
@@ -44,7 +48,11 @@ are not yet validated production replacements.
 
 ## Build and check
 
-Build/tests require Rust 1.97+, Cargo, Python 3 with PyGObject/Gio, and dbus-run-session.
+Build/tests require Rust 1.97+, Cargo, Python 3.11+ with PyGObject/Gio, and dbus-run-session.
+The complete offline runner also needs the GTK3/GTK4/Libadwaita typelibs,
+Ayatana AppIndicator bindings, Node.js and Debian packaging tools. The optional
+applet harness needs GTK3/Gio/Jansson development headers and a C compiler.
+Use Xvfb when no graphical display is available.
 The native NetworkManager runtime uses NetworkManager, iw and ip without Python.
 Native create_ap uses iw/ip, hostapd, dnsmasq and iptables; its new backend
 requires neither Bash nor Python. Historical Bash helpers can still be supervised
@@ -59,14 +67,22 @@ records the exact implementation revision and remote checks. The subsequent
 checks and the constraint preventing hotspot activation without changing upstream.
 
 ```sh
-cargo build --workspace --all-targets --locked
-cargo build --release --locked -p relayforge-service
-cargo test --workspace --locked
-python3 tools/check-vendor.py
-dbus-run-session -- /usr/bin/python3 -m unittest discover -s tests -v
+# Populate the locked dependency cache once if necessary:
+cargo fetch --locked
+python3 tools/check-offline.py
+# Also exercise the optimized/sanitized optional applet integration:
+xvfb-run -a python3 tools/check-offline.py --with-applet
 ```
 
-Tests use a disposable session bus and simulated networking. They do not install
+The runner builds release executables for deployment fixtures (unstripped debug
+binaries can exceed the deployment file-size limit), runs modules on separate
+private buses with explicit timeouts, and saves source hashes, logs and results
+under `artifacts/validation/`. Build caches are bound to source contents so old
+archive timestamps cannot select another candidate's binary. Repeated
+`--python-pattern` options select focused modules and are recorded as partial
+coverage in the report. Inspect reported skips as well as exit codes.
+
+Tests use disposable session buses and simulated networking. They do not install
 packages, start a hotspot, change the firewall, or use a physical Wi-Fi adapter.
 The deployment suites stage the service executable as a payload file, and the
 deployment engine refuses any single file larger than 64 MiB; a development build
@@ -88,42 +104,39 @@ user from the repository root:
 ./tools/build-deb.sh --backend create_ap --version 0.1.2~preview1
 ```
 
-The script builds the locked release executable and writes a `.deb` under
+The script builds the locked release executable and writes packages under
 `artifacts/deb/`. Use `--output-dir PATH` to change the destination, or
 `--binary /absolute/path/relayforge-service` to package an existing release ELF
-without invoking Cargo. An existing package of the same name is preserved unless
-`--force` is passed; a forced replacement is written to a temporary file and renamed
-into place, so an interrupted build never leaves a partial package. Each package
-contains one selected backend, the GTK settings/tray code, settings and tray
-launchers, a login autostart entry, D-Bus/Polkit policies and its systemd unit.
-GTK3 and Ayatana AppIndicator support are required package dependencies.
-The package ships its own Polkit action
-(`packaging/io.github.erhanzeyrek.WifiHotspot.policy`): the active local session is
-authorized without a password, so opening settings, saving and toggling the hotspot
-never prompt. Remote and inactive sessions are still denied. The policy still gates
-every protected call, and the pinned upstream policy that asks for administrator
-authentication on each call is available in `vendor/wifi-relay/data/`.
-The Wi-Fi Relay GNOME Shell extension ships in the package and is enabled on
-first login. To also build the patched NetworkManager applet and GNOME Settings
-Wi-Fi panel on the supported Ubuntu 26.10 baseline, use:
-
-```sh
-sudo apt-get build-dep network-manager-applet gnome-control-center
-./tools/build-deb.sh --backend create_ap --desktop-integrations both --output-dir artifacts/desktop-debs
-sudo apt install ./artifacts/desktop-debs/*.deb
-```
-
-This produces the RelayForge package plus matching desktop packages. The RelayForge
-package requires their exact versions, so installing only its `.deb` cannot silently
-omit the UI integrations. The default build still uses stock desktop packages;
-`--desktop-integrations nm-applet` or `gnome-settings` selects just one integration.
-See [desktop integration](integration/README.md) for supported versions and behavior.
-NetworkManager core is not patched. Shared-library dependencies are calculated
+without invoking Cargo. Existing packages are preserved unless `--force` is passed; replacements are
+written to temporary files and renamed into place. Each package
+contains one selected backend, GTK settings, D-Bus/Polkit policies and its systemd unit.
+The separate `relayforge-tray` package contains the tray launcher, maintained tray
+and login autostart entry. The service package recommends this exact-version
+companion; install both local files together to get tray controls. Removing
+`relayforge-tray` keeps the service and settings editor installed. GTK3 and Ayatana
+AppIndicator dependencies belong to the tray companion. User preferences survive
+removal; purge removes the packaged autostart conffile. Neither removal stops an
+already running desktop process; use its Quit action before removing controls.
+Add `--with-gnome` to build an optional `relayforge-gnome` companion package
+containing the retained Quick Settings and panel controls for GNOME Shell 45–51.
+The companion depends on the exact matching RelayForge package. Install both
+packages together, log out and back in if Shell has not discovered the extension,
+and explicitly enable `wifi-relay@3togo.github.io` through GNOME Extensions.
+Building or installing the companion does not enable it or start sharing.
+Add `--gnome-login-controls` alongside `--with-gnome` to opt into the retained
+first-login setup. It runs as the desktop user at GNOME login, honors saved
+startup/disable choices, and does not activate a hotspot.
+The ordinary package does not depend on GNOME Shell. Patched
+desktop integrations are separate development components. The existing
+`--desktop-integrations nm-applet|gnome-settings|both` workflow builds matching
+patched desktop packages and adds exact-version dependencies; see the component
+README files for that workflow. Shared-library dependencies are calculated
 with `dpkg-shlibdeps`; generate packages on the target distribution rather than
 assuming a binary built on a newer distribution will work on an older one.
 
 Installation does not generate credentials, enable or start a service. In a
-prepared test environment, install the package with `sudo apt install ./PATH.deb`.
+prepared test environment, install the desired matching packages with
+`sudo apt install ./relayforge_VERSION_ARCH.deb ./relayforge-tray_VERSION_all.deb`.
 For a fresh NetworkManager installation, choose the real Wi-Fi interface and run:
 
 ```sh
@@ -156,28 +169,75 @@ an existing configuration, so it is safe to run when one may already exist.
 The packaged tray is maintained in `desktop/tray.py`, adapted from the pinned
 Wi-Fi Relay source. It keeps service failure reasons visible in the menu, offers
 channel guidance when concurrent sharing is blocked, and explains unavailable
-controls. The imported vendor snapshot remains unchanged.
+controls. The imported vendor snapshot remains unchanged. The maintained settings adapter
+in `desktop/main.py` adds radio/configuration guidance and empty-inventory
+feedback; packaged GNOME controls use `desktop/extension.js` for persistent failure
+messages. The original editor is installed separately as `vendor_main.py`; the local
+adapter extends `desktop/upstream_main.py` to retain the incoming device-selector,
+adapter-limit and desktop lifecycle fixes.
+About shows the exact Debian package version and RelayForge project links while
+retaining component credits. AppStream metadata and the installed
+`wifi-hotspot-settings(1)` and `relayforge-service(8)` manuals describe the current
+backend limits. The existing desktop/D-Bus identifiers are retained for compatibility.
 
-Desktop controls start automatically at your next graphical login, honoring the
-saved `Start desktop controls at login` preference and the icon visibility
-preference. The login helper picks the integration for your session:
+Native services continue to preserve the upstream during ordinary Start.
+An experimental explicit band-switch controller is available only when an
+administrator appends `--allow-band-switch` to the native service command; packaged
+units omit it. Stop sharing before requesting a switch. This path uses a fresh
+same-network scanned BSSID and the existing profile, verifies association, and
+retains a recovery journal on ambiguity. Profiles pinned to a band/BSSID/channel
+are refused. It never edits saved profiles or requests secrets. Read
+[`docs/native-feature-policy.md`](docs/native-feature-policy.md) before considering
+this opt-in: only private-bus fixtures have been validated, and concurrent external
+activation cannot be excluded atomically. No active development Wi-Fi is used for
+these tests.
 
-- **GNOME** — the bundled Wi-Fi Relay Shell extension (top-bar indicator and a
-  Quick Settings toggle) is enabled once at first login, unless you already
-  disabled it in the Extensions app. Manage it like any other extension.
-- **KDE Plasma** — the StatusNotifier tray works with the panel's built-in
-  host; no extra packages are needed.
-- **XFCE** — the panel shows the tray through `xfce4-statusnotifier-plugin`,
-  which the package recommends. Install and add it to the panel if the icon
-  does not appear.
-- **Other desktops** — any panel with StatusNotifier/AppIndicator support can
-  display the tray.
+The native create_ap service also has a separate experimental
+`--allow-existing-bridge` opt-in. With `SHARE_METHOD=bridge`, choose an existing,
+active administrator-managed Linux bridge as `INTERNET_IFACE` and retain
+`NO_VIRT=0`. Only the newly owned virtual AP child is attached. The service never
+creates/deletes the bridge, moves upstream addresses/routes or acquires local
+DHCP/DNS/NAT/forwarding resources for this mode. The bridge must keep a stable MAC
+identity across port changes; preflight requires an already administrator-assigned
+bridge MAC and does not configure it automatically. Stop/crash recovery verifies ownership before
+detaching/deleting the AP; foreign or unexplained changes retain evidence.
+Packaged service units omit the opt-in. Only private simulated-interface tests
+have been run; live traffic/driver qualification still requires a dedicated bench.
+See [`docs/native-bridge-design.md`](docs/native-bridge-design.md) for scope and limits.
 
-To show the tray icon now, run `wifi-hotspot-tray` as your desktop user
-(without sudo), or open **Wi-Fi Relay Tray** from the application menu. All
-controls talk to the same D-Bus service, which shares the upstream through
-NetworkManager (or the create_ap backend). You can disable package autostart per
-user by creating `~/.config/autostart/relayforge-tray.desktop` containing:
+Native create_ap checks driver restrictions before launching its helper. Legacy
+`rtl871xdrv` drivers need a supported nl80211 replacement; brcmfmac requires a
+dedicated adapter for the native path. `WPA_VERSION=3` selects WPA2/WPA3 transition
+mode, with WPA2 clients allowed, and requires a passphrase rather than a raw PSK.
+Security is never rewritten to work around a driver. See the
+[driver/security audit](docs/native-driver-security-audit.md) for exact limits.
+
+For native create_ap, `COUNTRY` is a read-only requirement that must match the
+radio's already provisioned domain. RelayForge never sets the country or passes a
+country hint to hostapd. Active firewalld refuses local native iptables setup;
+leave it running and use the NetworkManager backend with its supported defaults
+or a validated administrator integration. Owned cleanup remains available after
+policy changes. See the [regulatory/firewall policy](docs/native-regulatory-firewall-policy.md).
+
+To export committed source without Git history or local work:
+
+```sh
+python3 tools/export-source.py --revision HEAD --output /absolute/new/relayforge-source.tar.gz
+```
+
+The adjacent JSON receipt records the exact commit, tree and archive SHA-256.
+Exports are reproducible for the same committed revision, ignore workspace edits
+and refuse existing outputs. Commit intended source first: `HEAD` cannot include
+uncommitted features. This is a source export, not a secret or licensing audit.
+
+With the tray companion installed, the tray starts at your next graphical login. To start it now,
+run `wifi-hotspot-tray` as your desktop user (without sudo), or open **Wi-Fi
+Relay Tray** from the application menu. Login startup honors the saved
+`Start desktop controls at login` preference and icon visibility preference.
+The panel needs AppIndicator/StatusNotifier support; on GNOME, an enabled
+AppIndicator extension is needed to display this tray. The package does not
+install or enable a GNOME extension. You can disable package autostart per user
+by creating `~/.config/autostart/relayforge-tray.desktop` containing:
 
 ```ini
 [Desktop Entry]

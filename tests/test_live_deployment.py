@@ -113,7 +113,7 @@ class LiveDeploymentTests(unittest.TestCase):
             invoke(c,'rollback');self.assertIsNotNone(c.files()[SERVICE]);c.preserved(self)
 
     def test_every_handover_phase_recovers_with_idle_replacement(self):
-        for phase in ['live-journal','live-masked','live-stopped','file-0','file-7','commit','live-files','live-starting','live-started','live-ready']:
+        for phase in ['live-journal','live-masked','live-stop-intent','live-stopped','file-0','file-7','commit','live-files','live-starting','live-started','live-ready']:
             with self.subTest(phase=phase),image() as c,manager(c) as bus:
                 c.fault(phase);invoke(c,'install',c.payload,ok=False)
                 self.assertTrue((c.root/LIVE).exists())
@@ -168,6 +168,48 @@ class LiveDeploymentTests(unittest.TestCase):
                 invoke(c,'install',c.payload)
                 control(c,lost_reply=method);invoke(c,'install',c.stage('v2'),ok=False)
                 control(c);invoke(c,'recover');self.assertFalse(maintenance(bus));c.preserved(self)
+
+    def test_interrupted_jobs_timeout_without_mutation_then_recover(self):
+        for method in ['StartUnit', 'StopUnit']:
+            with self.subTest(method=method), image() as c, manager(c) as bus:
+                invoke(c, 'install', c.payload)
+                control(c, hold_job=method, lost_reply=method)
+                invoke(c, 'install', c.stage('v2'), ok=False)
+                control(c, hold_job=method)
+                before = c.files()
+                before_events = events(c)
+                result = invoke(c, 'recover', ok=False)
+                self.assertIn('Service jobs did not settle; handover retained', result.stderr)
+                self.assertEqual(c.files(), before)
+                self.assertEqual(events(c), before_events)
+                self.assertTrue((c.root/LIVE).exists())
+                control(c)
+                invoke(c, 'recover')
+                self.assertFalse((c.root/LIVE).exists())
+                self.assertFalse(maintenance(bus))
+                c.preserved(self)
+
+    def test_stop_intent_recovery_refuses_unrecognized_processes_and_jobs(self):
+        for condition, error in [
+                ('bad_pid', 'Unrecognized native service generation'),
+                ('unexpected_job', 'Unrecognized service job')]:
+            with self.subTest(condition=condition), image() as c, manager(c) as bus:
+                invoke(c, 'install', c.payload)
+                c.fault('live-stop-intent')
+                invoke(c, 'install', c.stage('v2'), ok=False)
+                c.fault(None)
+                before = c.files()
+                before_events = events(c)
+                control(c, **{condition: True})
+                result = invoke(c, 'recover', ok=False)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(c.files(), before)
+                self.assertEqual(events(c), before_events)
+                self.assertTrue((c.root/LIVE).exists())
+                control(c)
+                invoke(c, 'recover')
+                self.assertFalse(maintenance(bus))
+                c.preserved(self)
 
     def test_masks_jobs_overrides_and_network_evidence_fail_before_mutation(self):
         for condition in ['mask','job','override','network']:

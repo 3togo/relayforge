@@ -74,6 +74,18 @@ pub struct ConfigFile {
     uid: u32,
 }
 
+/// Migration reports describe actions without exposing stored credentials.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct Migration {
+    pub factory_password: bool,
+    pub interfaces: bool,
+    pub applied: bool,
+}
+
+// Exact source-only factory template from Wi-Fi Relay revision 12f9f78.
+// A customized file is never eligible for automatic password rotation.
+const LEGACY_FACTORY: &str = include_str!("../../../compat/factory.conf");
+
 pub fn random_secret() -> Result<String, &'static str> {
     let mut bytes = [0u8; 16];
     File::open("/dev/urandom")
@@ -144,7 +156,7 @@ impl ConfigFile {
         Ok(file)
     }
 
-    fn read(&self) -> Result<(Config, Stamp), &'static str> {
+    fn read_text(&self) -> Result<(String, Stamp), &'static str> {
         let file = self.open_target()?;
         let before = file
             .metadata()
@@ -166,6 +178,14 @@ impl ConfigFile {
         {
             return Err("Configuration changed while reading; retry");
         }
+        if text.len() > MAX_CONFIG {
+            return Err("Configuration exceeds 64 KiB");
+        }
+        Ok((text, stamp))
+    }
+
+    fn read(&self) -> Result<(Config, Stamp), &'static str> {
+        let (text, stamp) = self.read_text()?;
         let raw = config::parse_records(&text)?;
         if !raw.contains_key("PASSPHRASE") {
             return Err("Stored configuration must explicitly contain PASSPHRASE");
@@ -201,6 +221,10 @@ impl ConfigFile {
 
     fn commit(&self, config: &Config, expected: Option<&Stamp>) -> Result<bool, &'static str> {
         let text = config::serialize_file(config)?;
+        self.commit_text(&text, expected)
+    }
+
+    fn commit_text(&self, text: &str, expected: Option<&Stamp>) -> Result<bool, &'static str> {
         let (name, mut file) = self.temporary()?;
         let result = (|| {
             file.set_permissions(std::fs::Permissions::from_mode(0o600))
@@ -377,6 +401,63 @@ impl ConfigFile {
         }
         self.commit(&config, None)
     }
+
+    /// Explicit offline migration; callers supply an unambiguous replacement
+    /// only after verifying the legacy wlan0 device is absent. No network I/O.
+    pub fn migrate_legacy(
+        &self,
+        interface: Option<&str>,
+        dry_run: bool,
+    ) -> Result<Migration, &'static str> {
+        if let Some(interface) = interface {
+            config::validate(&Config::from([("WIFI_IFACE".into(), interface.into())]))?;
+        }
+        let (text, stamp) = self.read_text()?;
+        let mut outcome = Migration {
+            factory_password: text == LEGACY_FACTORY,
+            ..Migration::default()
+        };
+        let mut updated = if outcome.factory_password {
+            text.replacen(
+                "PASSPHRASE=12345678\n",
+                &format!("PASSPHRASE={}\n", random_secret()?),
+                1,
+            )
+        } else {
+            text.clone()
+        };
+        if let Some(interface) = interface {
+            let mut repaired = String::new();
+            for line in updated.split_inclusive('\n') {
+                let record = line.trim_end_matches(['\r', '\n']);
+                let key = match record {
+                    "WIFI_IFACE=wlan0" | "WIFI_IFACE=INTERNET_IFACE=wlan0" => "WIFI_IFACE",
+                    "INTERNET_IFACE=wlan0" => "INTERNET_IFACE",
+                    _ => {
+                        repaired.push_str(line);
+                        continue;
+                    }
+                };
+                repaired.push_str(&format!("{key}={interface}"));
+                repaired.push_str(&line[record.len()..]);
+            }
+            outcome.interfaces = repaired != updated;
+            updated = repaired;
+        }
+        if updated == text {
+            return Ok(outcome);
+        }
+        let raw = config::parse_records(&updated)?;
+        if !raw.contains_key("PASSPHRASE") {
+            return Err("Stored configuration must explicitly contain PASSPHRASE");
+        }
+        config::validate(&raw)?;
+        if !dry_run {
+            self.commit_text(&updated, Some(&stamp))?;
+            outcome.applied = true;
+        }
+        Ok(outcome)
+    }
 }
 
 #[cfg(test)]
@@ -548,5 +629,76 @@ mod tests {
             std::fs::write(root.path(), text).unwrap();
             assert!(root.file().read().is_err());
         }
+    }
+
+    fn legacy_file(root: &Fixture, text: &str) {
+        std::fs::write(root.path(), text).unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn factory_migration_is_explicit_private_and_idempotent() {
+        let root = Fixture::new();
+        legacy_file(&root, LEGACY_FACTORY);
+        let report = root.file().migrate_legacy(Some("wlp2s0"), false).unwrap();
+        assert!(report.factory_password && report.interfaces && report.applied);
+        let text = std::fs::read_to_string(root.path()).unwrap();
+        assert!(text.starts_with("# Wi-Fi Hotspot Configuration\n"));
+        assert!(!text.contains("12345678"));
+        assert_eq!(root.file().read().unwrap().0["WIFI_IFACE"], "wlp2s0");
+        assert_eq!(
+            std::fs::metadata(root.path()).unwrap().mode() & 0o777,
+            0o600
+        );
+        let repeat = root.file().migrate_legacy(Some("wlp2s0"), false).unwrap();
+        assert!(!repeat.factory_password && !repeat.interfaces && !repeat.applied);
+        assert_eq!(std::fs::read_to_string(root.path()).unwrap(), text);
+    }
+
+    #[test]
+    fn customized_factory_password_is_preserved_and_dry_run_never_writes() {
+        let root = Fixture::new();
+        let customized = LEGACY_FACTORY.replace("SSID=Hotspot", "SSID=Customized");
+        legacy_file(&root, &customized);
+        let report = root.file().migrate_legacy(None, false).unwrap();
+        assert!(!report.factory_password && !report.applied);
+        assert_eq!(std::fs::read_to_string(root.path()).unwrap(), customized);
+        legacy_file(&root, LEGACY_FACTORY);
+        let report = root.file().migrate_legacy(Some("wlp2s0"), true).unwrap();
+        assert!(report.factory_password && report.interfaces && !report.applied);
+        assert_eq!(
+            std::fs::read_to_string(root.path()).unwrap(),
+            LEGACY_FACTORY
+        );
+    }
+
+    #[test]
+    fn interface_repair_preserves_literal_credentials_comments_and_custom_interfaces() {
+        let root = Fixture::new();
+        let input = "# Keep this comment\r\nWIFI_IFACE=INTERNET_IFACE=wlan0\r\nINTERNET_IFACE=eth9\r\nPASSPHRASE= keep =#'password \r\n";
+        legacy_file(&root, input);
+        let report = root.file().migrate_legacy(Some("wlp2s0"), false).unwrap();
+        assert!(report.interfaces && report.applied && !report.factory_password);
+        assert_eq!(
+            std::fs::read_to_string(root.path()).unwrap(),
+            input.replace("WIFI_IFACE=INTERNET_IFACE=wlan0", "WIFI_IFACE=wlp2s0")
+        );
+    }
+
+    #[test]
+    fn unsafe_or_invalid_migrations_leave_the_original_untouched() {
+        let root = Fixture::new();
+        let input = "WIFI_IFACE=wlan0\nPASSPHRASE=short\n";
+        legacy_file(&root, input);
+        assert!(root.file().migrate_legacy(Some("wlp2s0"), false).is_err());
+        assert_eq!(std::fs::read_to_string(root.path()).unwrap(), input);
+        assert!(root
+            .file()
+            .migrate_legacy(Some("--injected"), false)
+            .is_err());
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(root.file().migrate_legacy(None, false).is_err());
+        assert_eq!(std::fs::read_to_string(root.path()).unwrap(), input);
+        assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 1);
     }
 }

@@ -299,7 +299,7 @@ async fn create(p: &Platform, dir: &Directory) -> Result<String> {
     if data.owner.current()?.is_none() {
         return Err("Device owner exited");
     }
-    if data.fields["SHARE_METHOD"] == "bridge" || !data.fields["ADDED_UNMANAGED"].is_empty() {
+    if !data.fields["ADDED_UNMANAGED"].is_empty() {
         return Err("Unsupported historical device state");
     }
     super::check_subnet(p, dir, &data).await?;

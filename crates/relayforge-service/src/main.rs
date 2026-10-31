@@ -17,7 +17,7 @@ mod stale;
 use backend::Worker;
 use relayforge_core::{
     config::{self, parse_patch, Config},
-    validate_reply, Lifecycle, Method, Status, BUS_NAME, CREDENTIALS_ACTION, MANAGE_ACTION,
+    validate_reply, Lifecycle, Method, Status, BUS_NAME, CONTROL_ACTION, MANAGE_ACTION,
     OBJECT_PATH,
 };
 use serde_json::{json, Value};
@@ -39,8 +39,12 @@ const EXIT_MISSING_CONFIG: i32 = 17;
 struct Service {
     core: Arc<Mutex<Lifecycle>>,
     clients: Arc<Mutex<Value>>,
-    worker: Option<Arc<Worker>>,
+    worker: Arc<std::sync::OnceLock<Option<Arc<Worker>>>>,
+    ready: tokio::sync::watch::Receiver<bool>,
     native: Option<Arc<native_backend::Backend>>,
+    band_switch: Option<Arc<band_switch::Backend>>,
+    allow_band_switch: bool,
+    allow_existing_bridge: bool,
     configuration: Arc<Mutex<config_store::Store>>,
     operations: tokio::sync::Mutex<()>,
     notifications: tokio::sync::Mutex<()>,
@@ -61,23 +65,23 @@ struct Service {
     stop_requests: Semaphore,
 }
 
-// Build the dispatcher before advertising the compatibility name. Otherwise a
-// method arriving between name acquisition and registration can be lost by zbus 4.
-struct Initializing;
-#[zbus::interface(name = "io.github.relayforge.Initializing")]
-impl Initializing {
-    fn phase(&self) -> &str {
-        "initializing"
-    }
-}
-
 impl Service {
+    async fn wait_ready(&self) -> fdo::Result<()> {
+        let mut ready = self.ready.clone();
+        timeout(Duration::from_secs(90), ready.wait_for(|ready| *ready))
+            .await
+            .map_err(|_| fdo::Error::Failed("Service initialization timed out".into()))?
+            .map_err(|_| fdo::Error::Failed("Service initialization failed".into()))?;
+        Ok(())
+    }
+
     async fn authorize(
         &self,
         connection: &Connection,
         header: &Header<'_>,
         action: &str,
     ) -> fdo::Result<()> {
+        self.wait_ready().await?;
         let sender = header
             .sender()
             .ok_or_else(|| fdo::Error::AccessDenied("Missing bus-assigned sender".into()))?;
@@ -111,7 +115,12 @@ impl Service {
                         subject,
                         action,
                         HashMap::<String, String>::new(),
-                        1u32,
+                        u32::from(
+                            header
+                                .primary()
+                                .flags()
+                                .contains(zbus::message::Flags::AllowInteractiveAuth),
+                        ),
                         "",
                     ),
                 )
@@ -129,27 +138,6 @@ impl Service {
     async fn emit_status(&self, connection: &Connection) {
         let _notification = self.notifications.lock().await;
         let data = serde_json::to_string(&self.core.lock().unwrap().status).unwrap();
-        let _ = connection
-            .emit_signal(
-                None::<&str>,
-                OBJECT_PATH,
-                BUS_NAME,
-                "StatusChanged",
-                &(data,),
-            )
-            .await;
-    }
-
-    /// Broadcast a forced transitional state without storing it in the lifecycle.
-    ///
-    /// Native band switching never enters the lifecycle machine, so the pinned
-    /// dispatcher's snapshot rule applies: the transition lives on the signal
-    /// only and the next refresh reports the real state.
-    async fn emit_transition(&self, connection: &Connection, state: &str) {
-        let _notification = self.notifications.lock().await;
-        let mut status = self.core.lock().unwrap().status.clone();
-        status.state = state.into();
-        let data = serde_json::to_string(&status).unwrap();
         let _ = connection
             .emit_signal(
                 None::<&str>,
@@ -225,6 +213,7 @@ impl Service {
         connection: &Connection,
         request: Option<tokio::sync::watch::Receiver<u64>>,
     ) -> fdo::Result<Value> {
+        self.wait_ready().await?;
         // Subscribe before the operation queue: Stop/sleep must cancel requests
         // already waiting there, not just the currently executing startup.
         let mut cancelled = request.unwrap_or_else(|| self.cancellation.subscribe());
@@ -270,7 +259,7 @@ impl Service {
         } else {
             None
         };
-        if method == Method::Start
+        if matches!(method, Method::Start | Method::SwitchBandAndReconnect)
             && (cancelled_before_queue || *cancelled.borrow() != request_revision)
         {
             return Ok(json!({"success":false,"error":"Startup cancelled while queued"}));
@@ -289,6 +278,13 @@ impl Service {
             ));
         }
         if self.native.is_some() {
+            if matches!(method, Method::Start | Method::SetConfig)
+                && self.band_switch.as_ref().unwrap().pending().await
+            {
+                return Err(fdo::Error::Failed(
+                    "Band-switch recovery is pending; inspect the upstream before retrying".into(),
+                ));
+            }
             if method == Method::Start && self.power.lock().unwrap().blocked() {
                 return Ok(
                     json!({"success":false,"error":"Sharing is suspended or sleep cleanup is pending"}),
@@ -296,31 +292,55 @@ impl Service {
             }
             match method {
                 Method::SwitchBandAndReconnect => {
-                    // Reconnecting the upstream would tear down an owned AP's own
-                    // uplink, so a switch is only offered while nothing is shared.
-                    let busy = {
-                        let core = self.core.lock().unwrap();
-                        core.status.active
-                            || core.status.desired_active
-                            || matches!(
-                                core.status.state.as_str(),
-                                "connecting" | "stopping" | "waiting"
-                            )
-                    };
-                    if busy {
-                        return Ok(json!({"success":false,"error":"Stop sharing before switching the Wi-Fi band"}));
+                    if !self.allow_band_switch {
+                        return Ok(
+                            json!({"success":false,"error":"Native sharing preserves the existing upstream; reconnect Wi-Fi explicitly before Start. Experimental band switching requires the administrator's --allow-band-switch opt-in"}),
+                        );
                     }
-                    let target = params.as_str().unwrap_or_default().to_owned();
-                    let config = self.load_config().await?;
-                    // Same transitional broadcast as Start: the reconnect is
-                    // visible to every client before the first bus round trip.
-                    self.emit_transition(connection, "connecting").await;
-                    let reply = band_switch::switch(self.fixture, &config, &target).await;
-                    // A reconnect invalidates any armed resume intent and the radio
-                    // snapshot every Start re-inspects.
+                    if self.power.lock().unwrap().blocked() {
+                        return Ok(
+                            json!({"success":false,"error":"Band switching is blocked during sleep or pending cleanup"}),
+                        );
+                    }
+                    {
+                        let core = self.core.lock().unwrap();
+                        if core.status.active || core.status.desired_active {
+                            return Ok(
+                                json!({"success":false,"error":"Stop sharing before explicitly switching the upstream band"}),
+                            );
+                        }
+                    }
                     self.power.lock().unwrap().cancel();
+                    let config = self.load_config().await?;
+                    let epoch = self
+                        .core
+                        .lock()
+                        .unwrap()
+                        .begin(method)
+                        .map_err(|e| fdo::Error::Failed(e.into()))?;
                     self.emit_status(connection).await;
-                    return Ok(reply);
+                    let value = self
+                        .band_switch
+                        .as_ref()
+                        .unwrap()
+                        .switch(&config, params.as_str().unwrap_or(""), cancelled.clone())
+                        .await;
+                    let success = value["success"] == true;
+                    {
+                        let mut core = self.core.lock().unwrap();
+                        if core.is_current(epoch) {
+                            let _ = core.observe(json!(Status {
+                                state: "idle".into(),
+                                ..Status::default()
+                            }));
+                            core.complete(method, epoch, success);
+                            if !success {
+                                core.status.error = value["error"].as_str().map(str::to_owned);
+                            }
+                        }
+                    }
+                    self.emit_status(connection).await;
+                    return Ok(value);
                 }
                 Method::PrepareFirewall => return Ok(json!(true)),
                 _ => {}
@@ -329,12 +349,60 @@ impl Service {
         match method {
             Method::GetCapabilities => {
                 let config = self.load_config().await?;
+                let mut native_driver = None;
                 let snapshot = self
                     .radio
                     .inspect(&config["WIFI_IFACE"])
                     .await
                     .map_err(|error| fdo::Error::Failed(error.into()))?;
-                return Ok(json!(snapshot.capabilities));
+                let preflight = if let Some(native) = &self.native {
+                    let mut result = snapshot
+                        .native_preflight_with_bridge(&config, self.allow_existing_bridge)
+                        .map(|_| ());
+                    if result.is_ok() {
+                        match native.driver_preflight(&config) {
+                            Ok(module) => native_driver = module,
+                            Err(error) => result = Err(error),
+                        }
+                    }
+                    if result.is_ok() && config["SHARE_METHOD"] == "bridge" {
+                        result = native.bridge_preflight(&config).await;
+                    }
+                    if result.is_ok() {
+                        result = native.environment_preflight(&config, snapshot.phy).await;
+                    }
+                    Some(match result {
+                        Ok(_) => json!({"success":true,"scope":"configuration-and-radio"}),
+                        Err(error) => {
+                            json!({"success":false,"scope":"configuration-and-radio","error":error})
+                        }
+                    })
+                } else {
+                    None
+                };
+                let mut capabilities = json!(snapshot.capabilities);
+                if let Some(module) = native_driver {
+                    capabilities["native_driver"] = json!({"kernel_module":module,"hostapd_interface":"nl80211","scope":"policy-only"});
+                }
+                if self
+                    .native
+                    .as_ref()
+                    .is_some_and(|b| b.name() == "create_ap")
+                {
+                    // Security description is policy, never evidence of actual client negotiation.
+                    if let Ok(security) = relayforge_core::ap_policy::security(&config) {
+                        capabilities["native_security"] = json!(security);
+                    }
+                    capabilities["native_policy"] = json!({"country":"require-existing-radio-domain", "requested_country":config.get("COUNTRY"), "regulatory_mutation":false,
+                        "firewall":"scoped-iptables-without-active-firewalld", "pptp_module_loading":false, "parent_mac_override":false});
+                }
+                if let Some(preflight) = preflight {
+                    capabilities["startup_preflight"] = preflight;
+                    capabilities["upstream_band_switch"] = json!({"enabled":self.allow_band_switch,
+                        "profile_mutation":false,"pending_recovery":self.band_switch.as_ref().unwrap().pending().await});
+                    capabilities["existing_bridge"] = json!({"enabled":self.allow_existing_bridge,"scope":"owned-virtual-child-only"});
+                }
+                return Ok(capabilities);
             }
             Method::GetConfig => return self.load_config().await.map(|config| json!(config)),
             Method::SetConfig => {
@@ -432,11 +500,15 @@ impl Service {
                 Method::Start => Ok(native
                     .start(startup_config.as_ref().unwrap(), cancelled.clone(), None)
                     .await),
-                Method::Stop => Ok(json!(native.stop().await)),
+                Method::Stop => {
+                    let clean = native.stop().await;
+                    let band_clean = self.band_switch.as_ref().unwrap().recover().await.is_ok();
+                    Ok(json!(clean && band_clean))
+                }
                 _ => Err("Unsupported native operation".into()),
             }
         } else {
-            match &self.worker {
+            match self.worker.get().and_then(Option::as_ref) {
                 Some(worker) => worker.call(method, params).await,
                 None => self.demo(method, params, connection).await,
             }
@@ -557,7 +629,7 @@ impl Service {
                     "Stop the hotspot before changing its backend".into(),
                 ));
             }
-            if let Some(worker) = &self.worker {
+            if let Some(worker) = self.worker.get().and_then(Option::as_ref) {
                 // Fresh ownership/status inspection runs in the legacy operation queue.
                 // The Rust gate prevents a new Start until this transaction commits.
                 let observed = worker
@@ -644,11 +716,13 @@ impl Service {
 
 #[zbus::interface(name = "io.github.erhanzeyrek.WifiHotspot")]
 impl Service {
-    async fn get_status(&self) -> String {
-        serde_json::to_string(&self.core.lock().unwrap().status).unwrap()
+    async fn get_status(&self) -> fdo::Result<String> {
+        self.wait_ready().await?;
+        Ok(serde_json::to_string(&self.core.lock().unwrap().status).unwrap())
     }
-    async fn get_clients(&self) -> String {
-        self.clients.lock().unwrap().to_string()
+    async fn get_clients(&self) -> fdo::Result<String> {
+        self.wait_ready().await?;
+        Ok(self.clients.lock().unwrap().to_string())
     }
     async fn start(
         &self,
@@ -656,7 +730,7 @@ impl Service {
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
         let request = self.cancellation.subscribe();
-        self.authorize(connection, &header, MANAGE_ACTION).await?;
+        self.authorize(connection, &header, CONTROL_ACTION).await?;
         Ok(self
             .invoke_requested(Method::Start, Value::Null, connection, Some(request))
             .await?
@@ -667,7 +741,7 @@ impl Service {
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<bool> {
-        self.authorize(connection, &header, MANAGE_ACTION).await?;
+        self.authorize(connection, &header, CONTROL_ACTION).await?;
         Ok(self
             .invoke(Method::Stop, Value::Null, connection)
             .await?
@@ -679,7 +753,7 @@ impl Service {
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
-        self.authorize(connection, &header, CREDENTIALS_ACTION).await?;
+        self.authorize(connection, &header, MANAGE_ACTION).await?;
         Ok(self
             .invoke(Method::GetConfig, Value::Null, connection)
             .await?
@@ -691,7 +765,7 @@ impl Service {
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<bool> {
-        self.authorize(connection, &header, CREDENTIALS_ACTION).await?;
+        self.authorize(connection, &header, MANAGE_ACTION).await?;
         let config = parse_patch(config_json).map_err(|e| fdo::Error::InvalidArgs(e.into()))?;
         Ok(self
             .invoke(Method::SetConfig, json!(config), connection)
@@ -723,15 +797,17 @@ impl Service {
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<String> {
+        let request = self.cancellation.subscribe();
         self.authorize(connection, &header, MANAGE_ACTION).await?;
         if !matches!(target_band, "2.4" | "5") {
             return Err(fdo::Error::InvalidArgs("Band must be 2.4 or 5".into()));
         }
         Ok(self
-            .invoke(
+            .invoke_requested(
                 Method::SwitchBandAndReconnect,
                 json!(target_band),
                 connection,
+                Some(request),
             )
             .await?
             .to_string())
@@ -892,7 +968,51 @@ fn repair_config_interface(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut allow_existing_bridge = false;
+    let mut allow_band_switch = false;
+    let native_service = matches!(
+        args.first().map(String::as_str),
+        Some(
+            "--native-create-ap"
+                | "--test-create-ap"
+                | "--native-networkmanager"
+                | "--test-networkmanager"
+        )
+    );
+    while let Some(flag) = args.last().map(String::as_str).filter(|_| native_service) {
+        match flag {
+            "--allow-existing-bridge" if !allow_existing_bridge => {
+                allow_existing_bridge = true;
+            }
+            "--allow-band-switch" if !allow_band_switch => {
+                allow_band_switch = true;
+            }
+            _ => break,
+        }
+        args.pop();
+    }
+    if allow_existing_bridge
+        && !matches!(
+            args.first().map(String::as_str),
+            Some("--native-create-ap" | "--test-create-ap")
+        )
+    {
+        return Err("--allow-existing-bridge requires a native create_ap service mode".into());
+    }
+    if allow_band_switch {
+        if !matches!(
+            args.first().map(String::as_str),
+            Some(
+                "--native-networkmanager"
+                    | "--native-create-ap"
+                    | "--test-networkmanager"
+                    | "--test-create-ap"
+            )
+        ) {
+            return Err("--allow-band-switch is valid only for a native service mode".into());
+        }
+    }
     if args.as_slice() == ["--deployment-protocol"] {
         println!("{}", deployment::live::PROTOCOL);
         return Ok(());
@@ -953,6 +1073,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     }
+    if args.first().map(String::as_str) == Some("--migrate-config") {
+        let path = args
+            .get(1)
+            .ok_or("--migrate-config requires an absolute path")?;
+        let mut interface = None;
+        let mut detect = false;
+        let mut dry_run = false;
+        let mut index = 2;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--dry-run" => dry_run = true,
+                "--detect-interface" => detect = true,
+                "--wifi-interface" => {
+                    index += 1;
+                    interface = Some(
+                        args.get(index)
+                            .ok_or("--wifi-interface requires a value")?
+                            .clone(),
+                    );
+                }
+                _ => return Err("Unknown legacy migration option".into()),
+            }
+            index += 1;
+        }
+        if detect && interface.is_some() {
+            return Err("Choose explicit or detected interface repair, not both".into());
+        }
+        if detect || interface.is_some() {
+            let devices = inventory::discover(Path::new("/sys/class/net"))?;
+            if devices.all_interfaces.iter().any(|name| name == "wlan0") {
+                return Err("Legacy wlan0 exists; interface repair is not permitted".into());
+            }
+            if detect {
+                if devices.wifi_interfaces.len() != 1 {
+                    return Err("Automatic repair requires exactly one Wi-Fi adapter".into());
+                }
+                interface = Some(devices.wifi_interfaces[0].clone());
+            } else if !devices
+                .wifi_interfaces
+                .contains(interface.as_ref().unwrap())
+            {
+                return Err("The replacement must be an observed Wi-Fi adapter".into());
+            }
+        }
+        // This command is for protected, offline configuration copies. Avoid
+        // racing live Start/configuration transactions or changing credentials
+        // underneath connected hotspot clients. A live dry-run remains read-only.
+        if !dry_run
+            && std::fs::canonicalize(path).ok().as_deref()
+                == Some(Path::new("/etc/wifi-hotspot.conf"))
+        {
+            return Err("Migrate a protected offline configuration copy; live configuration writes are refused".into());
+        }
+        let file = config_store::ConfigFile::open(Path::new(path), unsafe { libc::geteuid() })?;
+        let report = file.migrate_legacy(interface.as_deref(), dry_run)?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
     if let Some(mode @ ("--init-config" | "--test-init-config")) =
         args.first().map(String::as_str)
     {
@@ -1009,7 +1187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         [mode,_path] if mode=="--demo-radio" => (true,false,false,None,None),
         [mode,path] if mode=="--demo-config" => (true,false,false,None,Some(PathBuf::from(path))),
         [mode,flag,path] if mode=="--system" && flag=="--legacy-root" => (false,false,true,Some(PathBuf::from(path)),Some(PathBuf::from("/etc/wifi-hotspot.conf"))),
-        _=>return Err("Usage: relayforge-service --native-networkmanager | --native-create-ap --legacy-root ROOT | --recover-all | --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --init-config PATH [--ssid NAME] [--wifi-interface NAME] [--backend create_ap|networkmanager] [--detect-interface] | --repair-config-interface PATH [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
+        _=>return Err("Usage: relayforge-service --native-networkmanager | --native-create-ap --legacy-root ROOT | --recover-all | --inspect-radio IFACE | --preflight-radio PATH | --demo | --demo-deny | --demo-polkit | --demo-config PATH | --demo-radio FIXTURE | --migrate-config PATH [--dry-run] [--detect-interface | --wifi-interface NAME] | --init-config PATH [--ssid NAME] [--wifi-interface NAME] [--backend create_ap|networkmanager] [--detect-interface] | --repair-config-interface PATH [--wifi-interface NAME] | --system --legacy-root /root-owned/installation".into()),
     };
     let native_mode = matches!(
         args.first().map(String::as_str),
@@ -1114,6 +1292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         config_store::Store::Memory(config)
     };
+    let mut band_switch = None;
     let native = if native_mode {
         let expected = if create_ap_mode {
             "create_ap"
@@ -1132,6 +1311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new().mode(0o700).create(&path)?;
         }
+        band_switch = Some(band_switch::Backend::open(&path, fixture)?);
         let backend = if create_ap_mode {
             let helper = if fixture {
                 PathBuf::from(&args[4])
@@ -1144,6 +1324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     runtime: path,
                 },
                 &helper,
+                allow_existing_bridge,
             )?)
         } else {
             native_backend::Backend::NetworkManager(networkmanager::Backend::new(
@@ -1155,6 +1336,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The pinned daemon's ExecStopPost runs nm_backend.py --recover-all:
             // release only journal-owned resources, then let systemd continue.
             let recovered = backend.recover().await;
+            let band_recovered = band_switch.as_ref().unwrap().recover().await;
+            let recovered = recovered.and(band_recovered);
             match &recovered {
                 Ok(()) => eprintln!("RelayForge: recovered owned sharing resources"),
                 Err(error) => eprintln!("RelayForge: recovery incomplete: {error}"),
@@ -1165,37 +1348,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    let builder = if demo {
-        zbus::connection::Builder::session()?
-    } else {
-        zbus::connection::Builder::system()?
-    };
-    let connection = builder.serve_at(OBJECT_PATH, Initializing)?.build().await?;
-    let reply = connection
-        .request_name_with_flags(BUS_NAME, fdo::RequestNameFlags::DoNotQueue.into())
-        .await?;
-    if reply != fdo::RequestNameReply::PrimaryOwner {
-        return Err("Existing Wi-Fi Relay service owns the compatibility name".into());
-    }
-    if let Some(native) = &native {
-        native.recover().await?;
-    }
     let core = Arc::new(Mutex::new(Lifecycle::default()));
     let clients = Arc::new(Mutex::new(json!([])));
     let (events, mut receiver) = mpsc::channel::<backend::Event>(64);
-    let worker = if native_mode {
-        None
-    } else if let Some(root) = root {
-        Some(Worker::spawn(&root, events).await?)
-    } else {
-        None
-    };
+    // Register the complete interface before claiming the name. Calls wait for
+    // recovery and the power handshake, while name ownership still excludes a
+    // second supervisor throughout initialization.
+    let worker_slot = Arc::new(std::sync::OnceLock::new());
+    let (startup_complete, ready) = tokio::sync::watch::channel(false);
     let (cancellation, _) = tokio::sync::watch::channel(0);
     let service = Service {
         core: core.clone(),
         clients: clients.clone(),
-        worker: worker.clone(),
+        worker: worker_slot.clone(),
+        ready,
         native: native.clone(),
+        band_switch: band_switch.clone(),
+        allow_band_switch,
+        allow_existing_bridge,
         configuration: Arc::new(Mutex::new(configuration)),
         operations: tokio::sync::Mutex::new(()),
         notifications: tokio::sync::Mutex::new(()),
@@ -1220,13 +1390,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         requests: Semaphore::new(31),
         stop_requests: Semaphore::new(1),
     };
+    let builder = if demo {
+        zbus::connection::Builder::session()?
+    } else {
+        zbus::connection::Builder::system()?
+    };
+    let connection = builder.serve_at(OBJECT_PATH, service)?.build().await?;
+    let reply = connection
+        .request_name_with_flags(BUS_NAME, fdo::RequestNameFlags::DoNotQueue.into())
+        .await?;
+    if reply != fdo::RequestNameReply::PrimaryOwner {
+        return Err("Existing Wi-Fi Relay service owns the compatibility name".into());
+    }
+    if let Some(native) = &native {
+        native.recover().await?;
+    }
+    if let Some(band) = &band_switch {
+        band.recover().await?;
+    }
+    let worker = if native_mode {
+        None
+    } else if let Some(root) = root {
+        Some(Worker::spawn(&root, events).await?)
+    } else {
+        None
+    };
+    worker_slot
+        .set(worker.clone())
+        .map_err(|_| "Worker initialized twice")?;
+    let interface = connection
+        .object_server()
+        .interface::<_, Service>(OBJECT_PATH)
+        .await?;
+    let service = interface.get().await;
     // Complete the first logind snapshot/inhibitor handshake before accepting Start.
     let initial_power = if native_mode {
         power::initialize(&connection, &service).await
     } else {
         None
     };
-    connection.object_server().at(OBJECT_PATH, service).await?;
+    drop(service);
+    drop(interface);
     connection
         .object_server()
         .at(
@@ -1236,10 +1440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .await?;
-    connection
-        .object_server()
-        .remove::<Initializing, _>(OBJECT_PATH)
-        .await?;
+    startup_complete.send_replace(true);
     let power_task = if native_mode {
         Some(tokio::spawn(power::run(connection.clone(), initial_power)))
     } else {

@@ -106,7 +106,7 @@ impl Manager {
             Ok(false)
         }
     }
-    async fn rows(&self) -> Result<Vec<Row>> {
+    async fn raw_rows(&self) -> Result<Vec<Row>> {
         let proxy = self.proxy().await?;
         let rows: Vec<Row> = bounded(proxy.call(
             "ListUnitsByPatterns",
@@ -121,11 +121,16 @@ impl Manager {
             if !UNITS.contains(&row.0.as_str())
                 || !names.insert(&row.0)
                 || !row.5.is_empty()
-                || row.7 != 0
-                || !matches!(row.3.as_str(), "active" | "inactive" | "failed")
             {
                 return Err("Service jobs, aliases or transitional states block handover");
             }
+        }
+        Ok(rows)
+    }
+    async fn rows(&self) -> Result<Vec<Row>> {
+        let rows = self.raw_rows().await?;
+        if rows.iter().any(|r| r.7 != 0 || !matches!(r.3.as_str(), "active" | "inactive" | "failed")) {
+            return Err("Service jobs or transitional states block handover");
         }
         Ok(rows)
     }
@@ -211,9 +216,9 @@ impl Manager {
                 return Err("Active service does not match installed native snapshot");
             }
             self.definition(&active).await?;
-            self.verify_process(&active, before.files[SERVICE].as_ref().unwrap(), uid)
+            let owner = self.verify_process(&active, before.files[SERVICE].as_ref().unwrap(), uid)
                 .await?;
-            self.idle().await?;
+            self.idle(&owner).await?;
             if self.maintenance_state().await? {
                 return Err("Service is already in maintenance without this handover");
             }
@@ -241,32 +246,28 @@ impl Manager {
         .await?;
         bounded(proxy.call("GetMaintenance", &())).await
     }
-    pub async fn maintenance(&self, enabled: bool) -> Result<()> {
-        let owner = self
-            .owner()
-            .await?
-            .ok_or("No compatibility owner for maintenance")?;
+    pub async fn maintenance(&self, owner: &str, enabled: bool) -> Result<()> {
+        if self.owner().await?.as_deref() != Some(owner) {
+            return Err("Verified service owner changed before maintenance");
+        }
         let proxy = bounded(Proxy::new(
             &self.connection,
-            owner.as_str(),
+            owner,
             GATE_PATH,
             GATE,
         ))
         .await?;
         let (): () = bounded(proxy.call("SetMaintenance", &(enabled,))).await?;
-        if self.owner().await?.as_deref() != Some(owner.as_str()) {
+        if self.owner().await?.as_deref() != Some(owner) {
             return Err("Service owner changed during maintenance");
         }
         Ok(())
     }
-    async fn idle(&self) -> Result<()> {
-        let owner = self
-            .owner()
-            .await?
-            .ok_or("No compatibility owner for status")?;
+    async fn idle(&self, owner: &str) -> Result<()> {
+        if self.owner().await?.as_deref() != Some(owner) { return Err("Verified service owner changed before status"); }
         let proxy = bounded(Proxy::new(
             &self.connection,
-            owner.as_str(),
+            owner,
             OBJECT_PATH,
             BUS_NAME,
         ))
@@ -283,6 +284,7 @@ impl Manager {
         {
             return Err("Sharing must be idle before live handover");
         }
+        if self.owner().await?.as_deref() != Some(owner) { return Err("Service owner changed during status"); }
         Ok(())
     }
     pub async fn quiesce(&self, state: &State, uid: u32) -> Result<()> {
@@ -293,26 +295,17 @@ impl Manager {
                     "relayforge-native.service" | "relayforge-create-ap.service"
                 ) =>
             {
-                let mut recognized = false;
-                for snapshot in [
-                    &state.current,
-                    state.pending.as_ref().ok_or("Missing live target")?,
-                ] {
-                    if super::unit(&snapshot.files)? == Some(unit.as_str())
-                        && self
-                            .verify_process(&unit, snapshot.files[SERVICE].as_ref().unwrap(), uid)
-                            .await
-                            .is_ok()
-                    {
-                        recognized = true;
-                        break;
+                let mut recognized = None;
+                for snapshot in [&state.current, state.pending.as_ref().ok_or("Missing live target")?] {
+                    if super::unit(&snapshot.files)? == Some(unit.as_str()) {
+                        if let Ok(owner) = self.verify_process(&unit, snapshot.files[SERVICE].as_ref().unwrap(), uid).await {
+                            recognized = Some(owner); break;
+                        }
                     }
                 }
-                if !recognized {
-                    return Err("Unrecognized native service generation during recovery");
-                }
-                self.maintenance(true).await?;
-                self.idle().await
+                let owner = recognized.ok_or("Unrecognized native service generation during recovery")?;
+                self.maintenance(&owner, true).await?;
+                self.idle(&owner).await
             }
             Some(_) => Err("Legacy services require explicit offline adoption"),
             None => self.no_owner().await,
@@ -340,7 +333,51 @@ impl Manager {
         let proxy = bounded(fdo::DBusProxy::new(&self.connection)).await?;
         bounded(proxy.reload_config()).await
     }
-    pub async fn stop_all(&self) -> Result<()> {
+    /// Settle jobs left by an interrupted handover before verifying and stopping
+    /// the recognized service. Never cancel an unrelated activation to recover.
+    pub async fn drain(&self, state: &State, uid: u32, starting: bool) -> Result<()> {
+        let pending = state.pending.as_ref().ok_or("Missing live target")?;
+        let owned_units = [
+            super::unit(&state.current.files)?,
+            super::unit(&pending.files)?,
+        ];
+        timeout(
+            Duration::from_secs(if self.fixture { 5 } else { 120 }),
+            async {
+                loop {
+                    let rows = self.raw_rows().await?;
+                    let mut settling = false;
+                    for row in &rows {
+                        if row.7 == 0 && matches!(row.3.as_str(), "active" | "inactive" | "failed")
+                        {
+                            continue;
+                        }
+                        let expected_state = matches!(
+                            row.3.as_str(),
+                            "active" | "inactive" | "failed" | "deactivating"
+                        ) || starting && row.3 == "activating";
+                        let expected_job =
+                            matches!(row.8.as_str(), "" | "stop") || starting && row.8 == "start";
+                        if !owned_units.contains(&Some(row.0.as_str()))
+                            || !expected_state
+                            || !expected_job
+                        {
+                            return Err("Unrecognized service job during live recovery");
+                        }
+                        settling = true;
+                    }
+                    if !settling {
+                        self.quiesce(state, uid).await?;
+                        return self.stop_all().await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            },
+        )
+        .await
+        .map_err(|_| "Service jobs did not settle; handover retained")?
+    }
+    async fn stop_all(&self) -> Result<()> {
         for row in self.rows().await? {
             if row.3 != "inactive" {
                 let _: OwnedObjectPath =
@@ -351,12 +388,7 @@ impl Manager {
             tokio::time::Instant::now() + Duration::from_secs(if self.fixture { 5 } else { 120 });
         loop {
             // Job/transitional states are expected while StopUnit is executing.
-            let proxy = self.proxy().await?;
-            let rows: Vec<Row> = bounded(proxy.call(
-                "ListUnitsByPatterns",
-                &(Vec::<&str>::new(), UNITS.as_slice()),
-            ))
-            .await?;
+            let rows = self.raw_rows().await?;
             if rows.iter().all(|r| r.3 == "inactive" && r.7 == 0) {
                 self.no_owner().await?;
                 return Ok(());
@@ -373,7 +405,7 @@ impl Manager {
             bounded(self.proxy().await?.call("StartUnit", &(unit, "fail"))).await?;
         Ok(())
     }
-    pub async fn verify_process(&self, unit: &str, entry: &Entry, uid: u32) -> Result<()> {
+    pub async fn verify_process(&self, unit: &str, entry: &Entry, uid: u32) -> Result<String> {
         if self.active().await?.as_deref() != Some(unit) {
             return Err("Expected native service is not active");
         }
@@ -417,17 +449,16 @@ impl Manager {
         {
             return Err("Running executable or bus owner changed during verification");
         }
-        Ok(())
+        Ok(owner)
     }
     pub async fn ready(&self, unit: &str, entry: &Entry, uid: u32) -> Result<()> {
         let deadline =
             tokio::time::Instant::now() + Duration::from_secs(if self.fixture { 5 } else { 30 });
         loop {
-            if self.verify_process(unit, entry, uid).await.is_ok()
-                && self.maintenance_state().await == Ok(true)
-                && self.idle().await.is_ok()
-            {
-                return Ok(());
+            if let Ok(owner) = self.verify_process(unit, entry, uid).await {
+                if self.maintenance_state().await == Ok(true) && self.idle(&owner).await.is_ok() {
+                    return Ok(());
+                }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(

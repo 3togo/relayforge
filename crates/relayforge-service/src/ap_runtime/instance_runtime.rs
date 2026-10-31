@@ -16,6 +16,7 @@ enum Options {
         marker: PathBuf,
         band: String,
         channel: String,
+        bridge: bool,
     },
 }
 fn parse(args: &[String]) -> Result<Options> {
@@ -38,7 +39,7 @@ fn parse(args: &[String]) -> Result<Options> {
                     .ok_or("Missing native instance option value")?
                     .clone()
             }
-            "--daemon" | "--no-haveged" => String::new(),
+            "--daemon" | "--no-haveged" | "--allow-existing-bridge" => String::new(),
             _ => return Err("Unsupported native instance option"),
         };
         if values.insert(name, value).is_some() {
@@ -46,6 +47,7 @@ fn parse(args: &[String]) -> Result<Options> {
         }
         index += 1;
     }
+    let bridge = values.remove("--allow-existing-bridge").is_some();
     if values.len() != 6 || !values.contains_key("--daemon") || !values.contains_key("--no-haveged")
     {
         return Err("Incomplete native instance options");
@@ -61,6 +63,7 @@ fn parse(args: &[String]) -> Result<Options> {
         return Err("Invalid native instance radio plan");
     }
     Ok(Options::Start {
+        bridge,
         config: values
             .remove("--config")
             .ok_or("Missing native config")?
@@ -87,6 +90,7 @@ fn options(
     marker: &Path,
     band: &str,
     channel: &str,
+    bridge: bool,
 ) -> Result<(Config, Directory, String)> {
     let root = p.fixture.as_deref().unwrap_or(Path::new("/run/relayforge"));
     directory(root, true)?;
@@ -118,13 +122,16 @@ fn options(
         return Err("Explicit instance credentials are required");
     }
     let config = config::validate(&raw)?;
+    relayforge_core::ap_policy::security(&config)?;
     if config["BACKEND"] != "create_ap"
-        || config["SHARE_METHOD"] == "bridge"
-        || config.contains_key("COUNTRY")
+        || (config["SHARE_METHOD"] == "bridge") != bridge
         || config["CHANNEL"] != channel
         || config["FREQ_BAND"] != band
     {
         return Err("Unsupported or changed frozen instance plan");
+    }
+    if bridge {
+        network::bridge::validate_config(&config)?;
     }
     for name in [
         marker.file_name().unwrap().to_str().unwrap().to_string(),
@@ -136,7 +143,7 @@ fn options(
     }
     Ok((config, dir, token.into()))
 }
-fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<PathBuf> {
+async fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<PathBuf> {
     private_mkdir(p.root.parent().ok_or("Missing engine parent")?)?;
     private_mkdir(&p.root)?;
     let engine = Directory::open(&p.root)?;
@@ -154,7 +161,7 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
         .create(&temporary)
         .map_err(|_| "Instance allocation already exists or is unavailable")?;
     let dir = Directory::open(&temporary)?;
-    let result = (|| {
+    let result = async {
         let mut fields: BTreeMap<String, String> = FIELDS
             .iter()
             .map(|v| (v.to_string(), String::new()))
@@ -176,8 +183,19 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
             ("NO_VIRT", &config["NO_VIRT"]),
             ("SHARE_METHOD", &config["SHARE_METHOD"]),
             (
+                "BRIDGE_IFACE",
+                if config["SHARE_METHOD"] == "bridge" {
+                    &config["INTERNET_IFACE"]
+                } else {
+                    ""
+                },
+            ),
+            (
                 "NO_DNS",
-                if config["NO_DNS"] == "1" || config["NO_DNSMASQ"] == "1" {
+                if config["SHARE_METHOD"] == "bridge"
+                    || config["NO_DNS"] == "1"
+                    || config["NO_DNSMASQ"] == "1"
+                {
                     "1"
                 } else {
                     "0"
@@ -218,6 +236,9 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
         }
         data.validate(p, &destination)?;
         dir.write("recovery.json", &data, None)?;
+        if config["SHARE_METHOD"] == "bridge" {
+            network::bridge::prepare(p, &dir, &data, config).await?;
+        }
         dir.write_bytes("pid", format!("{}\n", data.owner.pid).as_bytes(), None)?;
         let source = filename(temporary.file_name().unwrap().to_str().unwrap())?;
         let target = filename(&name)?;
@@ -238,10 +259,11 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
             .sync_all()
             .map_err(|_| "Cannot sync published instance")?;
         Ok(destination)
-    })();
+    }
+    .await;
     if result.is_err() && temporary.is_dir() {
         // Only the newly allocated unpublished records can be discarded. No recursion.
-        for name in ["pid", "recovery.json"] {
+        for name in ["pid", "recovery.json", "bridge.json"] {
             let _ = fs::remove_file(temporary.join(name));
         }
         let _ = fs::remove_dir(&temporary);
@@ -287,7 +309,7 @@ async fn start(
         action(p, "firewall-add", path, &["dns".into()]).await?;
     }
     let config = daemons::frozen(p, &data)?;
-    if config["NO_DNSMASQ"] == "0" {
+    if config["SHARE_METHOD"] != "bridge" && config["NO_DNSMASQ"] == "0" {
         action(p, "firewall-add", path, &["dhcp".into()]).await?;
     }
     marker_root.write_bytes(
@@ -326,6 +348,7 @@ fn known(name: &str, fixture: bool) -> bool {
         "radio.json",
         "device.json",
         "interface.json",
+        "bridge.json",
         "daemons.json",
         "pid",
         "wifi_iface",
@@ -542,6 +565,7 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
             marker,
             band,
             channel,
+            bridge,
         } => {
             // Register before publishing any state or starting network operations.
             let mut stop = signal(SignalKind::user_defined1())
@@ -552,8 +576,8 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
                 .map_err(|_| "Cannot register instance interrupt signal")?;
             let mut fail = signal(SignalKind::user_defined2())
                 .map_err(|_| "Cannot register instance failure signal")?;
-            let (config, root, token) = options(p, &config, &marker, &band, &channel)?;
-            let path = publish(p, &config, &marker, &token)?;
+            let (config, root, token) = options(p, &config, &marker, &band, &channel, bridge)?;
+            let path = publish(p, &config, &marker, &token).await?;
             let result = tokio::select! {
                 result = start(p, &path, &root, &marker, &band, &channel) => result,
                 _ = stop.recv() => Ok(()), _ = term.recv() => Ok(()), _ = interrupt.recv() => Ok(()),

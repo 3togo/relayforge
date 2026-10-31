@@ -44,6 +44,8 @@ struct Owned {
     band: String,
     channel: u16,
     process: Option<Birth>,
+    #[serde(default)]
+    bridge: bool,
 }
 impl Record for Owned {
     fn validate_record(&self) -> Result<()> {
@@ -75,7 +77,7 @@ impl Owned {
         root.join(self.file("pid").to_str().unwrap())
     }
     fn args(&self, root: &Path) -> Vec<String> {
-        vec![
+        let mut args = vec![
             self.helper.clone(),
             "--config".into(),
             self.config(root).to_string_lossy().into(),
@@ -87,10 +89,14 @@ impl Owned {
             self.channel.to_string(),
             "--daemon".into(),
             "--no-haveged".into(),
-        ]
+        ];
+        if self.bridge {
+            args.push("--allow-existing-bridge".into());
+        }
+        args
     }
     fn gate_args(&self, root: &Path) -> Vec<String> {
-        vec![
+        let mut args = vec![
             self.runner.clone(),
             "--create-ap-exec".into(),
             self.helper.clone(),
@@ -98,7 +104,11 @@ impl Owned {
             self.pidfile(root).to_string_lossy().into(),
             self.band.clone(),
             self.channel.to_string(),
-        ]
+        ];
+        if self.bridge {
+            args.push("--allow-existing-bridge".into());
+        }
+        args
     }
     fn allowed(&self, root: &Path, fixture: bool) -> Vec<(String, Vec<String>)> {
         let bash = fs::canonicalize("/bin/bash")
@@ -128,7 +138,7 @@ impl Owned {
 }
 /// The child cannot exec the network helper until the parent durably records its birth.
 pub fn exec_gate(args: &[String]) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    if args.len() != 6 {
+    if !(args.len() == 6 || args.len() == 7 && args[6] == "--allow-existing-bridge") {
         return Err("Invalid create_ap execution gate".into());
     }
     let mut ack = [0u8; 1];
@@ -145,6 +155,7 @@ pub fn exec_gate(args: &[String]) -> std::result::Result<(), Box<dyn std::error:
         band: args[4].clone(),
         channel: args[5].parse()?,
         process: None,
+        bridge: args.len() == 7,
     };
     if !["2.4", "5"].contains(&owned.band.as_str()) || !(1..=196).contains(&owned.channel) {
         return Err("Invalid create_ap radio plan".into());
@@ -161,21 +172,33 @@ pub fn exec_gate(args: &[String]) -> std::result::Result<(), Box<dyn std::error:
         command.arg(&owned.helper);
         command
     };
-    let error = command
-        .args([
-            "--config",
-            &args[2],
-            "--pidfile",
-            &args[3],
-            "--freq-band",
-            &owned.band,
-            "-c",
-            &args[5],
-            "--daemon",
-            "--no-haveged",
-        ])
-        .stdin(Stdio::null())
-        .exec();
+    if unsafe { libc::geteuid() } == 0 && !elf(Path::new(&owned.helper))? {
+        let bytes = private_read(Path::new(&args[2]), 65536, 0o600)?
+            .ok_or("Missing frozen helper configuration")?;
+        let config = config::parse_file(
+            std::str::from_utf8(&bytes).map_err(|_| "Invalid frozen helper configuration")?,
+        )?;
+        helper_policy(&config, false, false)?;
+        if owned.bridge {
+            return Err("Existing-bridge mode requires the native ELF helper".into());
+        }
+    }
+    command.args([
+        "--config",
+        &args[2],
+        "--pidfile",
+        &args[3],
+        "--freq-band",
+        &owned.band,
+        "-c",
+        &args[5],
+        "--daemon",
+        "--no-haveged",
+    ]);
+    if owned.bridge {
+        command.arg("--allow-existing-bridge");
+    }
+    let error = command.stdin(Stdio::null()).exec();
     Err(error.into())
 }
 #[derive(Clone)]
@@ -441,6 +464,38 @@ fn elf(path: &Path) -> Result<bool> {
         .map_err(|_| "Cannot inspect helper executable format")?;
     Ok(&magic == b"\x7fELF")
 }
+fn helper_policy(config: &Config, native: bool, fixture: bool) -> Result<()> {
+    if !native && !fixture {
+        if config.contains_key("COUNTRY") {
+            return Err("Read-only COUNTRY policy requires the native ELF helper; update the native installation before starting");
+        }
+        if config["SHARE_METHOD"] == "bridge" {
+            return Err("Existing-bridge mode requires the native ELF helper");
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod helper_policy_tests {
+    use super::*;
+    #[test]
+    fn production_country_and_bridge_constraints_cannot_use_a_legacy_helper() {
+        let mut config = config::defaults();
+        assert!(helper_policy(&config, false, false).is_ok());
+        config.insert("COUNTRY".into(), "US".into());
+        let before = config.clone();
+        assert!(helper_policy(&config, false, false)
+            .unwrap_err()
+            .contains("native ELF"));
+        assert!(helper_policy(&config, true, false).is_ok());
+        assert!(helper_policy(&config, false, true).is_ok());
+        assert_eq!(config, before);
+        config.remove("COUNTRY");
+        config.insert("SHARE_METHOD".into(), "bridge".into());
+        assert!(helper_policy(&config, false, false).is_err());
+        assert!(helper_policy(&config, true, false).is_ok());
+    }
+}
 async fn run_helper(
     program: &str,
     args: &[&str],
@@ -566,9 +621,38 @@ pub struct Backend {
     runner: String,
     journal: Mutex<Journal<Owned>>,
     session: Mutex<Option<Session>>,
+    allow_bridge: bool,
 }
 impl Backend {
-    pub fn new(platform: Platform, program: &Path) -> Result<Arc<Self>> {
+    pub async fn environment_preflight(&self, config: &Config, phy: u32) -> Result<()> {
+        helper_policy(config, elf(Path::new(&self.helper))?, self.platform.fixture)?;
+        crate::ap_runtime::environment_preflight(
+            config,
+            phy,
+            self.platform
+                .fixture
+                .then_some(self.platform.runtime.as_path()),
+        )
+        .await
+    }
+    pub fn driver_preflight(&self, config: &Config) -> Result<String> {
+        crate::ap_runtime::driver_preflight(
+            config,
+            self.platform
+                .fixture
+                .then_some(self.platform.runtime.as_path()),
+        )
+    }
+    pub async fn bridge_preflight(&self, config: &Config) -> Result<()> {
+        crate::ap_runtime::existing_bridge_preflight(
+            config,
+            self.platform
+                .fixture
+                .then_some(self.platform.runtime.as_path()),
+        )
+        .await
+    }
+    pub fn new(platform: Platform, program: &Path, allow_bridge: bool) -> Result<Arc<Self>> {
         private_directory(&platform.runtime, true)?;
         let helper = ap_process::trusted_file(program)?;
         let runner = std::env::current_exe()
@@ -588,6 +672,7 @@ impl Backend {
             runner,
             journal: Mutex::new(journal),
             session: Mutex::new(None),
+            allow_bridge,
         }))
     }
     fn directories(&self, owned: &Owned) -> Result<Vec<PathBuf>> {
@@ -848,12 +933,11 @@ impl Backend {
             if expected.is_some_and(|expected| !expected.matches_radio(&snapshot)) {
                 return Err("Original upstream changed during resume preflight");
             }
-            let plan = snapshot.preflight(config)?;
+            let plan = snapshot.native_preflight_with_bridge(config, self.allow_bridge)?;
+            self.driver_preflight(config)?;
+            self.environment_preflight(config, snapshot.phy).await?;
             if config["SHARE_METHOD"] == "bridge" {
-                return Err("Native create_ap declines bridge mode because it reconfigures the upstream interface");
-            }
-            if plan.switch_upstream || config.contains_key("COUNTRY") {
-                return Err("Native create_ap preserves upstream and regulatory settings; reconnect explicitly before Start");
+                self.bridge_preflight(config).await?;
             }
             let channel = plan.channel.ok_or("Missing permitted create_ap channel")?;
             let frequency = snapshot.capabilities.ap_channels[&plan.band]
@@ -876,6 +960,7 @@ impl Backend {
                 band: plan.band,
                 channel,
                 process: None,
+                bridge: config["SHARE_METHOD"] == "bridge",
             };
             self.journal.lock().await.write(&owned)?;
             let mut snapshot = String::new();

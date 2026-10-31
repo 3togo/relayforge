@@ -19,6 +19,7 @@ BUS=Gio.DBusConnection.new_for_address_sync(__import__('os').environ['DBUS_SESSI
 CONTROL=lambda:json.loads((DIRECTORY/'control.json').read_text())
 state={'events':[],'interfaces':{},'profiles':{},'active':{},'foreign_deletes':0,'parent_writes':0}
 registrations=[]
+band=None
 if (DIRECTORY/'trace.json').exists():
     state['interfaces']=json.loads((DIRECTORY/'trace.json').read_text()).get('interfaces',{})
 
@@ -63,6 +64,9 @@ def station_frequency(control):
 
 def property_value(path,interface,name):
     control=CONTROL()
+    if band:
+        value=band.property(path,interface,name)
+        if value is not None:return value
     if path in ACCESS_POINTS:
         point=ACCESS_POINTS[path]
         return {'Ssid':GLib.Variant('ay',point['ssid']),'Frequency':GLib.Variant('u',point['frequency']),
@@ -88,6 +92,7 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
     try:
         control=CONTROL()
         args=parameters.unpack()
+        if band and band.dispatch(sender,path,interface,method,args,invocation):return
         if interface=='org.freedesktop.DBus.Properties':
             if method=='Get':
                 invocation.return_value(GLib.Variant('(v)',(property_value(path,*args),)))
@@ -101,7 +106,8 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             request=json.loads(args[0]);iface=request.get('interface')
             if method=='Radio':
                 result=dict(CAPTURE)
-                result['link']=result['link'].replace('2412',str(station_frequency(control)))
+                if band:result=band.radio(result)
+                else:result['link']=result['link'].replace('2412',str(station_frequency(control)))
             elif method=='Identity':
                 if iface==CAPTURE['wifi_iface']:
                     result=dict(ifindex=8 if control.get('parent_replaced') else 7,mac='02:11:22:33:44:55',phy=0)
@@ -137,7 +143,8 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             elif method=='VerifyAp':
                 if control.get('bad_ap'):
                     raise ValueError('Wrong AP channel')
-                assert iface in state['interfaces'] and request['frequency']==station_frequency(control)
+                expected_frequency = band.ap_values(band.ap)['Frequency'].unpack() if band else station_frequency(control)
+                assert iface in state['interfaces'] and request['frequency']==expected_frequency
                 result=None
             elif method=='Clients':
                 result=[dict(mac='02:aa:bb:cc:dd:ee',ip='192.0.2.2',hostname='')] if control.get('client') else []
@@ -152,11 +159,14 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             if method=='Radio':
                 event('radio-read')
                 foreign_probe=bool(state['profiles']) and all(record['sender']!=sender for record in state['profiles'].values())
-                if control.get('hold_radio') or (control.get('hold_post_start_probe') and foreign_probe):
+                def band_held(fields):
+                    return band and ((fields.get('hold_band_probe') and band.ap!=1)
+                                     or (fields.get('hold_restore_probe') and band.requests>=2 and band.ap==1))
+                if control.get('hold_radio') or (control.get('hold_post_start_probe') and foreign_probe) or band_held(control):
                     event('radio-held')
                     def finish():
                         fields=CONTROL()
-                        if fields.get('hold_radio') or (fields.get('hold_post_start_probe') and foreign_probe):return True
+                        if fields.get('hold_radio') or (fields.get('hold_post_start_probe') and foreign_probe) or band_held(fields):return True
                         invocation.return_value(reply);return False
                     GLib.timeout_add(20,finish)
                     return
@@ -233,7 +243,8 @@ def dispatch(_bus,sender,path,interface,method,parameters,invocation):
             assert options=={'persist':'volatile','bind-activation':'dbus-client'}
             assert settings['connection']['autoconnect'] is False
             assert settings['802-11-wireless']['mode']=='ap'
-            assert settings['802-11-wireless']['channel']==(6 if control.get('roamed') else 1)
+            expected_channel = {1:149,2:1,3:6,4:36}[band.ap] if band else (6 if control.get('roamed') else 1)
+            assert settings['802-11-wireless']['channel']==expected_channel
             # A psk-flags value makes NetworkManager discard the supplied PSK and
             # ask an agent for it, so the profile must not carry one.
             assert 'psk-flags' not in settings['802-11-wireless-security']
@@ -294,9 +305,10 @@ register(ROOT,'''<node><interface name="org.freedesktop.NetworkManager">
 <method name="DeactivateConnection"><arg type="o" direction="in"/></method></interface></node>''')
 register(ROOT,device_xml())
 register(ROOT+'/Settings','''<node><interface name="org.freedesktop.NetworkManager.Settings"><method name="ListConnections"><arg type="ao" direction="out"/></method><method name="GetConnectionByUuid"><arg type="s" direction="in"/><arg type="o" direction="out"/></method></interface></node>''')
-register(ROOT+'/Devices/1','''<node><interface name="org.freedesktop.NetworkManager.Device.Wireless"><method name="RequestScan"><arg type="a{sv}" direction="in"/></method></interface></node>''')
-for index in ACCESS_POINTS:
-    register(index,device_xml())
+if not CONTROL().get('band_switch'):
+    register(ROOT+'/Devices/1','''<node><interface name="org.freedesktop.NetworkManager.Device.Wireless"><method name="RequestScan"><arg type="a{sv}" direction="in"/></method></interface></node>''')
+    for index in ACCESS_POINTS:
+        register(index,device_xml())
 profile_xml='''<node><interface name="org.freedesktop.NetworkManager.Settings.Connection"><method name="GetSettings"><arg type="a{sa{sv}}" direction="out"/></method><method name="Delete"/></interface></node>'''
 for number in (1,2):
     register(ROOT+f'/Settings/{number}',profile_xml)
@@ -305,6 +317,9 @@ for number in (1,2):
 register(ROOT,'<node><interface name="'+TEST+'">'+''.join('<method name="'+name+'"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>' for name in ('Radio','Identity','Interfaces','Routes','Create','Delete','RestoreMode','VerifyAp','Clients','EmitRadio'))+'</interface></node>')
 BUS.signal_subscribe('org.freedesktop.DBus','org.freedesktop.DBus','NameOwnerChanged','/org/freedesktop/DBus',None,Gio.DBusSignalFlags.NONE,owner_changed)
 BUS.call_sync('org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus','RequestName',GLib.Variant('(su)',(NM,4)),None,Gio.DBusCallFlags.NONE,5000,None)
+if CONTROL().get('band_switch'):
+    from fake_band_provider import BandProvider
+    band=BandProvider(CONTROL,event,register,state)
 event('ready')
 print('ready',flush=True)
 GLib.MainLoop().run()

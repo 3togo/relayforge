@@ -177,6 +177,8 @@ impl Service {
             };
             let previous = self.core.lock().unwrap().status.clone();
             let clean = native.stop().await;
+            let band_clean = self.band_switch.as_ref().unwrap().recover().await.is_ok();
+            let clean = clean && band_clean;
             self.core
                 .lock()
                 .unwrap()

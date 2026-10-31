@@ -1,5 +1,6 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
 mod daemons;
+mod environment;
 mod instance_runtime;
 mod network;
 mod radio_plan;
@@ -26,6 +27,31 @@ use std::{
 };
 use tokio::time::{sleep, Instant};
 const LIMIT: usize = 65536;
+pub(crate) async fn environment_preflight(
+    config: &relayforge_core::config::Config,
+    phy: u32,
+    fixture: Option<&Path>,
+) -> Result<()> {
+    let p = Platform::new(fixture)?;
+    environment::firewall(&p, &config["SHARE_METHOD"]).await?;
+    environment::regulatory(&p, config, phy).await?;
+    Ok(())
+}
+pub(crate) fn driver_preflight(
+    config: &relayforge_core::config::Config,
+    fixture: Option<&Path>,
+) -> Result<String> {
+    let platform = Platform::new(fixture)?;
+    let module = radio_plan::module(&platform, &config["WIFI_IFACE"])?;
+    relayforge_core::ap_policy::driver(&module, config)?;
+    Ok(module)
+}
+pub(crate) async fn existing_bridge_preflight(
+    config: &relayforge_core::config::Config,
+    fixture: Option<&Path>,
+) -> Result<()> {
+    network::bridge::preflight(&Platform::new(fixture)?, config).await
+}
 const FIELDS: &[&str] = &[
     "CONFDIR",
     "COMMON_CONFDIR",
@@ -449,6 +475,7 @@ impl Executor for Firewall<'_> {
         }
         if operation == Some("-I") {
             self.permit_add()?;
+            environment::firewall(self.platform, &self.data.fields["SHARE_METHOD"]).await?;
         }
         if let Some(root) = &self.platform.fixture {
             let dir = Directory::open(root)?;
@@ -931,7 +958,19 @@ async fn stop(identity: &Identity) -> Result<()> {
     Err("Owned child did not exit")
 }
 async fn stop_children(p: &Platform, dir: &Directory) -> Result<()> {
+    let bridge_failure = async {
+        if dir.read("bridge.json", true, LIMIT)?.is_none() {
+            return Ok(());
+        }
+        let (data, _) = snapshot(p, dir)?;
+        network::bridge::begin_stop(p, dir, &data).await
+    }
+    .await
+    .err();
     let mut failure = daemons::stop_all(p, dir).await.err();
+    if failure.is_none() {
+        failure = bridge_failure;
+    }
     dir.entries()?;
     // Quiesce every verified child even if another record prevents full cleanup.
     for (stem, exe) in CHILDREN {
@@ -1074,6 +1113,12 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
         }
         "stop-children" if values.is_empty() => {
             stop_children(p, &dir).await?;
+            Ok(String::new())
+        }
+        "bridge-prepare" if values.is_empty() => {
+            let (data, _) = snapshot(p, &dir)?;
+            let config = daemons::frozen(p, &data)?;
+            network::bridge::prepare(p, &dir, &data, &config).await?;
             Ok(String::new())
         }
         "check-interfaces" if values.is_empty() => {

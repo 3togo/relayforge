@@ -1,0 +1,1423 @@
+diff --git a/src/core/devices/wifi/nm-device-wifi.c b/src/core/devices/wifi/nm-device-wifi.c
+index b836c1e..3cbe533 100644
+--- a/src/core/devices/wifi/nm-device-wifi.c
++++ b/src/core/devices/wifi/nm-device-wifi.c
+@@ -7,12 +7,14 @@
+ #include "src/core/nm-default-daemon.h"
+ 
+ #include "nm-device-wifi.h"
++#include "nm-wifi-relay-utils.h"
+ 
+ #include <netinet/in.h>
+ #include <unistd.h>
+ #include <linux/if_ether.h>
+ 
+ #include "libnm-glib-aux/nm-ref-string.h"
++#include "libnm-glib-aux/nm-random-utils.h"
+ #include "libnm-glib-aux/nm-c-list.h"
+ #include "nm-device-wifi-p2p.h"
+ #include "nm-wifi-ap.h"
+@@ -41,6 +43,7 @@
+ #include "nm-wifi-common.h"
+ #include "libnm-core-intern/nm-core-internal.h"
+ #include "nm-config.h"
++#include "libnm-core-intern/nm-wifi-relay.h"
+ 
+ #define _NMLOG_DEVICE_TYPE NMDeviceWifi
+ #include "devices/nm-device-logging.h"
+@@ -61,6 +64,7 @@
+ /*****************************************************************************/
+ 
+ NM_GOBJECT_PROPERTIES_DEFINE(NMDeviceWifi,
++                             PROP_RELAY_VIRTUAL,
+                              PROP_MODE,
+                              PROP_BITRATE,
+                              PROP_ACCESS_POINTS,
+@@ -78,6 +82,13 @@ enum {
+ static guint signals[LAST_SIGNAL] = {0};
+ 
+ typedef struct {
++    gboolean      relay_virtual;
++    guint         relay_watch;
++    int           relay_ifindex;
++    guint32       relay_frequency;
++    guint8        relay_mac[6];
++    NMConnection *relay_parent_connection;
++
+     CList       aps_lst_head;
+     GHashTable *aps_idx_by_supplicant_path;
+ 
+@@ -513,7 +524,9 @@ _scan_notify_allowed(NMDeviceWifi *self, NMTernary do_kickoff)
+     explicit_allowed = FALSE;
+     periodic_allowed = FALSE;
+ 
+-    if (!c_list_is_empty(&priv->scanning_prohibited_lst_head)) {
++    if (priv->relay_virtual) {
++        /* A concurrent AP must never scan or change the shared radio channel. */
++    } else if (!c_list_is_empty(&priv->scanning_prohibited_lst_head)) {
+         /* something prohibits scanning. */
+     } else if (NM_IN_SET(priv->mode, _NM_802_11_MODE_ADHOC, _NM_802_11_MODE_AP)) {
+         /* Don't scan when a an AP or Ad-Hoc connection is active as it will
+@@ -597,6 +610,10 @@ supplicant_interface_acquire_cb(NMSupplicantManager         *supplicant_manager,
+ 
+     if (error) {
+         _LOGE(LOGD_WIFI, "Couldn't initialize supplicant interface: %s", error->message);
++        if (priv->relay_virtual && nm_device_get_state(NM_DEVICE(self)) == NM_DEVICE_STATE_PREPARE)
++            nm_device_state_changed(NM_DEVICE(self),
++                                    NM_DEVICE_STATE_FAILED,
++                                    NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED);
+         supplicant_iface_state_down(self);
+         nm_device_remove_pending_action(NM_DEVICE(self),
+                                         NM_PENDING_ACTION_WAITING_FOR_SUPPLICANT,
+@@ -644,11 +661,14 @@ supplicant_interface_acquire_cb(NMSupplicantManager         *supplicant_manager,
+     if (nm_supplicant_interface_get_state(priv->sup_iface)
+         != NM_SUPPLICANT_INTERFACE_STATE_STARTING) {
+         /* fake an initial state change. */
+-        supplicant_iface_state(user_data,
+-                               NM_SUPPLICANT_INTERFACE_STATE_STARTING,
+-                               nm_supplicant_interface_get_state(priv->sup_iface),
+-                               0,
+-                               FALSE);
++        supplicant_iface_state(
++            user_data,
++            priv->relay_virtual ? nm_supplicant_interface_get_state(priv->sup_iface)
++                                : NM_SUPPLICANT_INTERFACE_STATE_STARTING,
++            priv->relay_virtual ? NM_SUPPLICANT_INTERFACE_STATE_STARTING
++                                : nm_supplicant_interface_get_state(priv->sup_iface),
++            0,
++            FALSE);
+     }
+ }
+ 
+@@ -983,6 +1003,9 @@ deactivate(NMDevice *device)
+ 
+     _indicate_addressing_running_reset(self);
+ 
++    if (priv->relay_virtual)
++        return;
++
+     /* Ensure we're in infrastructure mode after deactivation; some devices
+      * (usually older ones) don't scan well in adhoc mode.
+      */
+@@ -1030,6 +1053,13 @@ check_connection_compatible(NMDevice     *device,
+ 
+     s_wireless = nm_connection_get_setting_wireless(connection);
+ 
++    if (!!nm_wifi_relay_get_parent(connection) != !!priv->relay_virtual) {
++        nm_utils_error_set_literal(error,
++                                   NM_UTILS_ERROR_CONNECTION_AVAILABLE_TEMPORARY,
++                                   "Wi-Fi Relay profiles require their own virtual AP device");
++        return FALSE;
++    }
++
+     perm_hw_addr = nm_device_get_permanent_hw_address(device);
+     mac          = nm_setting_wireless_get_mac_address(s_wireless);
+     if (perm_hw_addr) {
+@@ -1336,6 +1366,8 @@ is_available(NMDevice *device, NMDeviceCheckDevAvailableFlags flags)
+     NMDeviceWifiPrivate       *priv = NM_DEVICE_WIFI_GET_PRIVATE(self);
+     NMSupplicantInterfaceState supplicant_state;
+ 
++    if (priv->relay_virtual && !nm_device_is_real(device))
++        return TRUE;
+     if (!priv->enabled)
+         return FALSE;
+ 
+@@ -1377,6 +1409,9 @@ can_auto_connect(NMDevice *device, NMSettingsConnection *sett_conn, char **speci
+     s_wifi = nm_connection_get_setting_wireless(connection);
+     g_return_val_if_fail(s_wifi, FALSE);
+ 
++    if (priv->relay_virtual)
++        return FALSE;
++
+     /* Always allow autoconnect for AP and non-autoconf Ad-Hoc or Mesh */
+     auto4   = nm_streq0(nm_utils_get_ip_config_method(connection, AF_INET),
+                       NM_SETTING_IP4_CONFIG_METHOD_AUTO);
+@@ -1423,6 +1458,8 @@ _hw_addr_set_scanning(NMDeviceWifi *self, gboolean do_reset)
+         return;
+ 
+     priv = NM_DEVICE_WIFI_GET_PRIVATE(self);
++    if (priv->relay_virtual)
++        return;
+ 
+     randomize = nm_config_data_get_device_config_boolean_by_device(
+         NM_CONFIG_GET_DATA,
+@@ -2562,6 +2599,10 @@ supplicant_iface_state(NMDeviceWifi              *self,
+     devstate = nm_device_get_state(device);
+     scanning = nm_supplicant_interface_get_scanning(priv->sup_iface);
+ 
++    if (priv->relay_virtual && devstate == NM_DEVICE_STATE_PREPARE
++        && nm_supplicant_interface_state_is_operational(new_state))
++        nm_device_activate_schedule_stage1_device_prepare(device, FALSE);
++
+     if (old_state == NM_SUPPLICANT_INTERFACE_STATE_STARTING) {
+         _LOGD(LOGD_WIFI, "supplicant ready");
+         nm_device_queue_recheck_available(NM_DEVICE(device),
+@@ -2792,6 +2833,10 @@ recheck_p2p_availability(NMDeviceWifi *self)
+     NMDeviceWifiPrivate *priv = NM_DEVICE_WIFI_GET_PRIVATE(self);
+     gboolean             p2p_available;
+ 
++    /* The concurrent Relay child is exclusively an AP, not a P2P controller. */
++    if (priv->relay_virtual)
++        return;
++
+     g_object_get(priv->sup_iface, NM_SUPPLICANT_INTERFACE_P2P_AVAILABLE, &p2p_available, NULL);
+ 
+     if (p2p_available && !priv->p2p_device) {
+@@ -3254,6 +3299,27 @@ act_stage1_prepare(NMDevice *device, NMDeviceStateReason *out_failure_reason)
+     s_wireless = nm_connection_get_setting_wireless(connection);
+     g_return_val_if_fail(s_wireless, NM_ACT_STAGE_RETURN_FAILURE);
+ 
++    /* Software Relay devices are realized immediately before activation, so
++     * their supplicant interface can still be absent or initializing here. */
++    if (!priv->sup_iface) {
++        if (!priv->relay_virtual || !nm_device_is_real(device)
++            || nm_device_get_ifindex(device) <= 0) {
++            *out_failure_reason = NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED;
++            return NM_ACT_STAGE_RETURN_FAILURE;
++        }
++        if (!priv->sup_create_handle)
++            supplicant_interface_acquire(self);
++        return NM_ACT_STAGE_RETURN_POSTPONE;
++    }
++    if (!nm_supplicant_interface_state_is_operational(
++            nm_supplicant_interface_get_state(priv->sup_iface))) {
++        if (priv->relay_virtual
++            && nm_supplicant_interface_get_state(priv->sup_iface)
++                   == NM_SUPPLICANT_INTERFACE_STATE_STARTING)
++            return NM_ACT_STAGE_RETURN_POSTPONE;
++        *out_failure_reason = NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED;
++        return NM_ACT_STAGE_RETURN_FAILURE;
++    }
+     nm_supplicant_interface_cancel_wps(priv->sup_iface);
+ 
+     mode = nm_setting_wireless_get_mode(s_wireless);
+@@ -3702,7 +3768,8 @@ device_state_changed(NMDevice           *device,
+          * the device is now ready to use.
+          */
+         if (priv->enabled && (nm_device_get_firmware_missing(device) == FALSE)) {
+-            if (!priv->sup_iface)
++            if (!priv->sup_iface && !priv->sup_create_handle
++                && (!priv->relay_virtual || nm_device_get_ifindex(device) > 0))
+                 supplicant_interface_acquire(self);
+         }
+         clear_aps = TRUE;
+@@ -3812,6 +3879,19 @@ can_reapply_change(NMDevice   *device,
+     NMDeviceClass *device_class;
+ 
+     /* Only handle wireless setting here, delegate other settings to parent class */
++    if (NM_DEVICE_WIFI_GET_PRIVATE(device)->relay_virtual
++        && nm_streq(setting_name, NM_SETTING_USER_SETTING_NAME)
++        && (!s_old || !s_new
++            || !nm_streq0(
++                nm_setting_user_get_data(NM_SETTING_USER(s_old), NM_WIFI_RELAY_PARENT_KEY),
++                nm_setting_user_get_data(NM_SETTING_USER(s_new), NM_WIFI_RELAY_PARENT_KEY)))) {
++        g_set_error_literal(error,
++                            NM_DEVICE_ERROR,
++                            NM_DEVICE_ERROR_FAILED,
++                            "Changing a Wi-Fi Relay parent requires reactivation");
++        return FALSE;
++    }
++
+     if (nm_streq(setting_name, NM_SETTING_WIRELESS_SETTING_NAME)) {
+         return nm_device_hash_check_invalid_keys(
+             diffs,
+@@ -3850,6 +3930,9 @@ get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+     const char         **list;
+ 
+     switch (prop_id) {
++    case PROP_RELAY_VIRTUAL:
++        g_value_set_boolean(value, priv->relay_virtual);
++        break;
+     case PROP_MODE:
+         g_value_set_uint(value, priv->mode);
+         break;
+@@ -3890,6 +3973,11 @@ set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *ps
+     NMDeviceWifiPrivate *priv   = NM_DEVICE_WIFI_GET_PRIVATE(device);
+ 
+     switch (prop_id) {
++    case PROP_RELAY_VIRTUAL:
++        priv->relay_virtual = g_value_get_boolean(value);
++        if (priv->relay_virtual)
++            priv->mode = _NM_802_11_MODE_AP;
++        break;
+     case PROP_CAPABILITIES:
+         /* construct-only */
+         priv->capabilities = g_value_get_uint(value);
+@@ -3918,6 +4006,158 @@ nm_device_wifi_init(NMDeviceWifi *self)
+     priv->wowlan_restore                    = _NM_SETTING_WIRELESS_WAKE_ON_WLAN_IGNORE;
+ }
+ 
++/* Native Wi-Fi Relay additions: LGPL-2.1-or-later. */
++static gboolean
++relay_unrealize(NMDevice *device, GError **error)
++{
++    NMDeviceWifiPrivate  *priv     = NM_DEVICE_WIFI_GET_PRIVATE(device);
++    NMPlatform           *platform = nm_device_get_platform(device);
++    const NMPlatformLink *link;
++
++    if (!priv->relay_virtual || priv->relay_ifindex <= 0)
++        return TRUE;
++    link = nm_platform_link_get(platform, priv->relay_ifindex);
++    if (!link)
++        return TRUE;
++    if (!nm_wifi_relay_link_owned(link,
++                                  priv->relay_ifindex,
++                                  nm_device_get_iface(device),
++                                  priv->relay_mac)) {
++        g_set_error_literal(error,
++                            NM_DEVICE_ERROR,
++                            NM_DEVICE_ERROR_FAILED,
++                            "Wi-Fi Relay interface identity changed; refusing to remove it");
++        return FALSE;
++    }
++    if (nm_platform_wifi_relay_delete(platform, priv->relay_ifindex) < 0) {
++        g_set_error_literal(error,
++                            NM_DEVICE_ERROR,
++                            NM_DEVICE_ERROR_FAILED,
++                            "Failed to remove the owned Wi-Fi Relay interface");
++        return FALSE;
++    }
++    return TRUE;
++}
++
++static void
++relay_unrealize_notify(NMDevice *device)
++{
++    NMDeviceWifiPrivate *priv = NM_DEVICE_WIFI_GET_PRIVATE(device);
++
++    nm_clear_g_source(&priv->relay_watch);
++    g_clear_object(&priv->relay_parent_connection);
++    priv->relay_ifindex   = 0;
++    priv->relay_frequency = 0;
++    NM_DEVICE_CLASS(nm_device_wifi_parent_class)->unrealize_notify(device);
++}
++
++static gboolean
++relay_parent_watch(gpointer user_data)
++{
++    NMDeviceWifi             *self   = NM_DEVICE_WIFI(user_data);
++    gs_unref_object NMDevice *device = g_object_ref(NM_DEVICE(self));
++    NMDeviceWifiPrivate      *priv   = NM_DEVICE_WIFI_GET_PRIVATE(self);
++    NMDevice                 *parent = nm_device_parent_get_device(device);
++    NMDeviceState             state  = nm_device_get_state(device);
++    gboolean                  valid;
++
++    valid = parent && nm_device_get_state(parent) == NM_DEVICE_STATE_ACTIVATED
++            && nm_device_get_applied_connection(parent) == priv->relay_parent_connection
++            && nm_platform_wifi_get_frequency(nm_device_get_platform(device),
++                                              nm_device_get_ifindex(parent))
++                   == priv->relay_frequency;
++    if (!valid) {
++        priv->relay_watch = 0;
++        if (state >= NM_DEVICE_STATE_PREPARE && state <= NM_DEVICE_STATE_ACTIVATED)
++            nm_device_state_changed(device,
++                                    NM_DEVICE_STATE_FAILED,
++                                    NM_DEVICE_STATE_REASON_DEPENDENCY_FAILED);
++        else if (nm_device_is_real(device)) {
++            gs_free_error GError *error = NULL;
++            if (!nm_device_unrealize(device, TRUE, &error))
++                _LOGW(LOGD_WIFI, "Wi-Fi Relay cleanup failed: %s", error->message);
++        }
++        return G_SOURCE_REMOVE;
++    }
++    return G_SOURCE_CONTINUE;
++}
++
++static gboolean
++relay_create_and_realize(NMDevice              *device,
++                         NMConnection          *connection,
++                         NMDevice              *parent,
++                         const NMPlatformLink **out_link,
++                         GError               **error)
++{
++    NMDeviceWifiPrivate *priv     = NM_DEVICE_WIFI_GET_PRIVATE(device);
++    NMPlatform          *platform = nm_device_get_platform(device);
++    NMSettingWireless   *wifi     = nm_connection_get_setting_wireless(connection);
++    guint32              frequency;
++    int                  r;
++
++    if (!priv->relay_virtual || !nm_wifi_relay_verify(connection, error)) {
++        if (!error || !*error)
++            g_set_error_literal(error,
++                                NM_DEVICE_ERROR,
++                                NM_DEVICE_ERROR_FAILED,
++                                "Not a Wi-Fi Relay profile");
++        return FALSE;
++    }
++    if (!parent || !NM_IS_DEVICE_WIFI(parent) || NM_DEVICE_WIFI_GET_PRIVATE(parent)->relay_virtual
++        || !nm_streq(nm_device_get_iface(parent), nm_wifi_relay_get_parent(connection))
++        || nm_device_get_state(parent) != NM_DEVICE_STATE_ACTIVATED
++        || nm_platform_wifi_get_mode(platform, nm_device_get_ifindex(parent))
++               != _NM_802_11_MODE_INFRA) {
++        g_set_error_literal(error,
++                            NM_DEVICE_ERROR,
++                            NM_DEVICE_ERROR_MISSING_DEPENDENCIES,
++                            "Wi-Fi Relay requires an active wpa_supplicant station parent");
++        return FALSE;
++    }
++    frequency = nm_utils_wifi_channel_to_freq(nm_setting_wireless_get_channel(wifi),
++                                              nm_setting_wireless_get_band(wifi));
++    if (!frequency
++        || frequency != nm_platform_wifi_get_frequency(platform, nm_device_get_ifindex(parent))) {
++        g_set_error_literal(error,
++                            NM_DEVICE_ERROR,
++                            NM_DEVICE_ERROR_FAILED,
++                            "Wi-Fi Relay must use the current parent station channel");
++        return FALSE;
++    }
++    nm_random_get_bytes(priv->relay_mac, sizeof(priv->relay_mac));
++    priv->relay_mac[0] = (priv->relay_mac[0] & 0xfe) | 0x02;
++    r                  = nm_platform_wifi_relay_add(platform,
++                                                    nm_device_get_ifindex(parent),
++                                                    nm_device_get_iface(device),
++                                                    frequency,
++                                                    priv->relay_mac,
++                                                    out_link);
++    if (r < 0) {
++        g_set_error(
++            error,
++            NM_DEVICE_ERROR,
++            NM_DEVICE_ERROR_CREATION_FAILED,
++            "Cannot create concurrent Wi-Fi Relay AP (driver/interface capacity/channel): %s",
++            nm_strerror(r));
++        return FALSE;
++    }
++    priv->relay_ifindex   = (*out_link)->ifindex;
++    priv->relay_frequency = frequency;
++    g_set_object(&priv->relay_parent_connection, nm_device_get_applied_connection(parent));
++    priv->capabilities = NM_DEVICE_WIFI_GET_PRIVATE(parent)->capabilities;
++    _notify(NM_DEVICE_WIFI(device), PROP_CAPABILITIES);
++    nm_device_parent_set_ifindex(device, nm_device_get_ifindex(parent));
++    priv->relay_watch = g_timeout_add_seconds(1, relay_parent_watch, device);
++    return TRUE;
++}
++
++static NMDeviceCapabilities
++relay_get_generic_capabilities(NMDevice *device)
++{
++    return NM_DEVICE_WIFI_GET_PRIVATE(device)->relay_virtual ? NM_DEVICE_CAP_IS_SOFTWARE
++                                                             : NM_DEVICE_CAP_NONE;
++}
++
+ static void
+ constructed(GObject *object)
+ {
+@@ -3950,6 +4190,26 @@ nm_device_wifi_new(const char *iface, _NMDeviceWifiCapabilities capabilities)
+                         NULL);
+ }
+ 
++NMDevice *
++nm_device_wifi_new_relay(const char *iface)
++{
++    return g_object_new(NM_TYPE_DEVICE_WIFI,
++                        NM_DEVICE_IFACE,
++                        iface,
++                        NM_DEVICE_TYPE_DESC,
++                        "Wi-Fi Relay AP",
++                        NM_DEVICE_DEVICE_TYPE,
++                        NM_DEVICE_TYPE_WIFI,
++                        NM_DEVICE_LINK_TYPE,
++                        NM_LINK_TYPE_WIFI,
++                        "relay-virtual",
++                        TRUE,
++                        NM_DEVICE_WIFI_CAPABILITIES,
++                        (guint) (_NM_WIFI_DEVICE_CAP_AP | _NM_WIFI_DEVICE_CAP_RSN
++                                 | _NM_WIFI_DEVICE_CAP_CIPHER_CCMP),
++                        NULL);
++}
++
+ static void
+ dispose(GObject *object)
+ {
+@@ -3967,6 +4227,8 @@ dispose(GObject *object)
+     supplicant_interface_release(self);
+     cleanup_supplicant_failures(self);
+ 
++    nm_clear_g_source(&priv->relay_watch);
++    g_clear_object(&priv->relay_parent_connection);
+     g_clear_object(&priv->sup_mgr);
+ 
+     remove_all_aps(self, TRUE);
+@@ -4014,6 +4276,10 @@ nm_device_wifi_class_init(NMDeviceWifiClass *klass)
+     device_class->connection_type_check_compatible = NM_SETTING_WIRELESS_SETTING_NAME;
+     device_class->link_types                       = NM_DEVICE_DEFINE_LINK_TYPES(NM_LINK_TYPE_WIFI);
+ 
++    device_class->create_and_realize          = relay_create_and_realize;
++    device_class->unrealize                   = relay_unrealize;
++    device_class->unrealize_notify            = relay_unrealize_notify;
++    device_class->get_generic_capabilities    = relay_get_generic_capabilities;
+     device_class->can_auto_connect            = can_auto_connect;
+     device_class->get_autoconnect_allowed     = get_autoconnect_allowed;
+     device_class->is_available                = is_available;
+@@ -4039,6 +4305,13 @@ nm_device_wifi_class_init(NMDeviceWifiClass *klass)
+ 
+     device_class->rfkill_type = NM_RFKILL_TYPE_WLAN;
+ 
++    obj_properties[PROP_RELAY_VIRTUAL] =
++        g_param_spec_boolean("relay-virtual",
++                             "",
++                             "",
++                             FALSE,
++                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
++
+     obj_properties[PROP_MODE] = g_param_spec_uint(NM_DEVICE_WIFI_MODE,
+                                                   "",
+                                                   "",
+diff --git a/src/core/devices/wifi/nm-device-wifi.h b/src/core/devices/wifi/nm-device-wifi.h
+index 17893a1..dc2904b 100644
+--- a/src/core/devices/wifi/nm-device-wifi.h
++++ b/src/core/devices/wifi/nm-device-wifi.h
+@@ -36,6 +36,8 @@ GType nm_device_wifi_get_type(void);
+ 
+ NMDevice *nm_device_wifi_new(const char *iface, _NMDeviceWifiCapabilities capabilities);
+ 
++NMDevice *nm_device_wifi_new_relay(const char *iface);
++
+ const CList *_nm_device_wifi_get_aps(NMDeviceWifi *self);
+ 
+ void _nm_device_wifi_request_scan(NMDeviceWifi          *self,
+diff --git a/src/core/devices/wifi/nm-wifi-factory.c b/src/core/devices/wifi/nm-wifi-factory.c
+index 19880a9..b4c6aea 100644
+--- a/src/core/devices/wifi/nm-wifi-factory.c
++++ b/src/core/devices/wifi/nm-wifi-factory.c
+@@ -19,6 +19,8 @@
+ #include "settings/nm-settings-connection.h"
+ #include "libnm-platform/nm-platform.h"
+ #include "nm-config.h"
++#include "nm-manager.h"
++#include "libnm-core-intern/nm-wifi-relay.h"
+ 
+ /*****************************************************************************/
+ 
+@@ -54,6 +56,7 @@ NM_DEVICE_FACTORY_DECLARE_TYPES(
+ G_MODULE_EXPORT NMDeviceFactory *
+ nm_device_factory_create(GError **error)
+ {
++    nm_manager_set_capability(NM_MANAGER_GET, (NMCapability) NM_WIFI_RELAY_CAPABILITY);
+     return g_object_new(NM_TYPE_WIFI_FACTORY, NULL);
+ }
+ 
+@@ -94,7 +97,11 @@ create_device(NMDeviceFactory      *factory,
+     _NM80211Mode  mode;
+ 
+     g_return_val_if_fail(iface != NULL, NULL);
+-    g_return_val_if_fail(plink != NULL, NULL);
++    if (!plink) {
++        if (connection && nm_wifi_relay_get_parent(connection))
++            return nm_device_wifi_new_relay(iface);
++        return NULL;
++    }
+     g_return_val_if_fail(g_strcmp0(iface, plink->name) == 0, NULL);
+     g_return_val_if_fail(NM_IN_SET(plink->type, NM_LINK_TYPE_WIFI, NM_LINK_TYPE_OLPC_MESH), NULL);
+ 
+@@ -181,6 +188,12 @@ create_device(NMDeviceFactory      *factory,
+ 
+ /*****************************************************************************/
+ 
++static const char *
++get_connection_parent(NMDeviceFactory *factory, NMConnection *connection)
++{
++    return nm_wifi_relay_get_parent(connection);
++}
++
+ static void
+ nm_wifi_factory_init(NMWifiFactory *self)
+ {}
+@@ -190,6 +203,7 @@ nm_wifi_factory_class_init(NMWifiFactoryClass *klass)
+ {
+     NMDeviceFactoryClass *factory_class = NM_DEVICE_FACTORY_CLASS(klass);
+ 
++    factory_class->get_connection_parent = get_connection_parent;
+     factory_class->create_device       = create_device;
+     factory_class->get_supported_types = get_supported_types;
+ }
+diff --git a/src/core/devices/wifi/nm-wifi-relay-utils.h b/src/core/devices/wifi/nm-wifi-relay-utils.h
+new file mode 100644
+index 0000000..666b870
+--- /dev/null
++++ b/src/core/devices/wifi/nm-wifi-relay-utils.h
+@@ -0,0 +1,18 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef NM_WIFI_RELAY_UTILS_H
++#define NM_WIFI_RELAY_UTILS_H
++
++#include "libnm-platform/nm-platform.h"
++
++static inline gboolean
++nm_wifi_relay_link_owned(const NMPlatformLink *link,
++                         int                   ifindex,
++                         const char           *name,
++                         const guint8         *mac)
++{
++    return link && link->ifindex == ifindex && link->type == NM_LINK_TYPE_WIFI
++           && nm_streq(link->name, name) && link->l_address.len == 6
++           && memcmp(link->l_address.data, mac, 6) == 0;
++}
++
++#endif
+diff --git a/src/core/devices/wifi/tests/test-devices-wifi.c b/src/core/devices/wifi/tests/test-devices-wifi.c
+index a780a3e..29a5b0b 100644
+--- a/src/core/devices/wifi/tests/test-devices-wifi.c
++++ b/src/core/devices/wifi/tests/test-devices-wifi.c
+@@ -8,9 +8,13 @@
+ #include "devices/wifi/nm-wifi-utils.h"
+ #include "devices/wifi/nm-wifi-ap.h"
+ #include "devices/wifi/nm-device-wifi.h"
++#include "devices/wifi/nm-wifi-relay-utils.h"
+ #include "libnm-core-intern/nm-core-internal.h"
+ 
+ #include "nm-test-utils-core.h"
++#include "libnm-core-intern/nm-wifi-relay.h"
++#include "libnm-platform/wifi/nm-wifi-utils-nl80211.h"
++#include <linux/nl80211.h>
+ 
+ #define DEBUG 1
+ 
+@@ -1560,6 +1564,243 @@ test_ap_check_compatible_band(void)
+ 
+ NMTST_DEFINE();
+ 
++/* Downstream Wi-Fi Relay regression tests: LGPL-2.1-or-later. */
++static NMConnection *
++relay_test_connection(void)
++{
++    NMConnection          *connection = nm_simple_connection_new();
++    NMSetting             *con        = nm_setting_connection_new();
++    NMSetting             *wifi       = nm_setting_wireless_new();
++    NMSetting             *security   = nm_setting_wireless_security_new();
++    NMSetting             *ip4        = nm_setting_ip4_config_new();
++    NMSetting             *ip6        = nm_setting_ip6_config_new();
++    NMSettingUser         *user       = NM_SETTING_USER(nm_setting_user_new());
++    gs_unref_bytes GBytes *ssid       = g_bytes_new_static("Relay test", 10);
++
++    g_object_set(con,
++                 NM_SETTING_CONNECTION_ID,
++                 "Relay test",
++                 NM_SETTING_CONNECTION_UUID,
++                 "de56a052-a2d5-4ee4-b13d-6304eb15dc60",
++                 NM_SETTING_CONNECTION_TYPE,
++                 NM_SETTING_WIRELESS_SETTING_NAME,
++                 NM_SETTING_CONNECTION_INTERFACE_NAME,
++                 "nm-relay0",
++                 NM_SETTING_CONNECTION_AUTOCONNECT,
++                 FALSE,
++                 NULL);
++    g_object_set(wifi,
++                 NM_SETTING_WIRELESS_SSID,
++                 ssid,
++                 NM_SETTING_WIRELESS_MODE,
++                 "ap",
++                 NM_SETTING_WIRELESS_BAND,
++                 "bg",
++                 NM_SETTING_WIRELESS_CHANNEL,
++                 6u,
++                 NM_SETTING_WIRELESS_CLONED_MAC_ADDRESS,
++                 "preserve",
++                 NULL);
++    g_object_set(security,
++                 NM_SETTING_WIRELESS_SECURITY_KEY_MGMT,
++                 "wpa-psk",
++                 NM_SETTING_WIRELESS_SECURITY_PSK,
++                 "relay-test-password",
++                 NULL);
++    nm_setting_wireless_security_add_proto(NM_SETTING_WIRELESS_SECURITY(security), "rsn");
++    g_object_set(ip4, NM_SETTING_IP_CONFIG_METHOD, "shared", NULL);
++    g_object_set(ip6, NM_SETTING_IP_CONFIG_METHOD, "disabled", NULL);
++    nm_setting_user_set_data(user, NM_WIFI_RELAY_PARENT_KEY, "wlan0", NULL);
++    nm_connection_add_setting(connection, con);
++    nm_connection_add_setting(connection, wifi);
++    nm_connection_add_setting(connection, security);
++    nm_connection_add_setting(connection, ip4);
++    nm_connection_add_setting(connection, ip6);
++    nm_connection_add_setting(connection, NM_SETTING(user));
++    return connection;
++}
++
++static void
++test_relay_profile(void)
++{
++    gs_unref_object NMConnection *connection = relay_test_connection();
++    gs_unref_object NMConnection *roundtrip  = NULL;
++    gs_unref_variant GVariant    *settings   = NULL;
++    gs_free_error GError         *error      = NULL;
++
++    g_assert_true(nm_connection_is_virtual(connection));
++    g_assert_true(nm_connection_verify(connection, &error));
++    g_assert_no_error(error);
++    settings  = nm_connection_to_dbus(connection, NM_CONNECTION_SERIALIZE_ALL);
++    roundtrip = nm_simple_connection_new_from_dbus(settings, &error);
++    g_assert_no_error(error);
++    g_assert_cmpstr(nm_wifi_relay_get_parent(roundtrip), ==, "wlan0");
++    g_assert_true(nm_connection_is_virtual(roundtrip));
++    nm_setting_user_set_data(
++        NM_SETTING_USER(nm_connection_get_setting(connection, NM_TYPE_SETTING_USER)),
++        NM_WIFI_RELAY_PARENT_KEY,
++        NULL,
++        NULL);
++    g_assert_false(nm_connection_is_virtual(connection));
++    g_assert_true(nm_connection_verify(connection, &error));
++    g_assert_no_error(error);
++}
++
++static void
++test_relay_invalid_profile(void)
++{
++    int i;
++
++    for (i = 0; i < 9; i++) {
++        gs_unref_object NMConnection *connection = relay_test_connection();
++        gs_free_error GError         *error      = NULL;
++        NMSettingWireless            *wifi       = nm_connection_get_setting_wireless(connection);
++
++        switch (i) {
++        case 0:
++            nm_setting_user_set_data(
++                NM_SETTING_USER(nm_connection_get_setting(connection, NM_TYPE_SETTING_USER)),
++                NM_WIFI_RELAY_PARENT_KEY,
++                "nm-relay0",
++                NULL);
++            break;
++        case 1:
++            nm_setting_user_set_data(
++                NM_SETTING_USER(nm_connection_get_setting(connection, NM_TYPE_SETTING_USER)),
++                NM_WIFI_RELAY_PARENT_KEY,
++                "bad/name",
++                NULL);
++            break;
++        case 2:
++            g_object_set(wifi, NM_SETTING_WIRELESS_MODE, "infrastructure", NULL);
++            break;
++        case 3:
++            g_object_set(wifi, NM_SETTING_WIRELESS_CHANNEL, 0u, NULL);
++            break;
++        case 4:
++            g_object_set(nm_connection_get_setting_ip4_config(connection),
++                         NM_SETTING_IP_CONFIG_METHOD,
++                         "auto",
++                         NULL);
++            break;
++        case 5:
++            g_object_set(nm_connection_get_setting_connection(connection),
++                         NM_SETTING_CONNECTION_AUTOCONNECT,
++                         TRUE,
++                         NULL);
++            break;
++        case 6:
++            g_object_set(wifi, NM_SETTING_WIRELESS_CLONED_MAC_ADDRESS, "random", NULL);
++            break;
++        case 7:
++            nm_setting_wireless_security_add_proto(
++                nm_connection_get_setting_wireless_security(connection),
++                "wpa");
++            break;
++        case 8:
++            g_object_set(nm_connection_get_setting_connection(connection),
++                         NM_SETTING_CONNECTION_INTERFACE_NAME,
++                         NULL,
++                         NULL);
++            break;
++        }
++        g_assert_false(nm_connection_verify(connection, &error));
++        g_assert_error(error, NM_CONNECTION_ERROR, NM_CONNECTION_ERROR_INVALID_PROPERTY);
++    }
++}
++
++static void
++test_relay_owned_link(void)
++{
++    const guint8   mac[6] = {2, 1, 2, 3, 4, 5};
++    NMPlatformLink link   = {.ifindex = 21, .type = NM_LINK_TYPE_WIFI, .l_address.len = 6};
++
++    g_strlcpy(link.name, "nm-relay0", sizeof(link.name));
++    memcpy(link.l_address.data, mac, 6);
++    g_assert_true(nm_wifi_relay_link_owned(&link, 21, "nm-relay0", mac));
++    g_assert_false(nm_wifi_relay_link_owned(NULL, 21, "nm-relay0", mac));
++    g_assert_false(nm_wifi_relay_link_owned(&link, 22, "nm-relay0", mac));
++    g_assert_false(nm_wifi_relay_link_owned(&link, 21, "wlan0", mac));
++    link.l_address.data[5]++;
++    g_assert_false(nm_wifi_relay_link_owned(&link, 21, "nm-relay0", mac));
++    memcpy(link.l_address.data, mac, 6);
++    link.l_address.len = 0;
++    g_assert_false(nm_wifi_relay_link_owned(&link, 21, "nm-relay0", mac));
++    link.l_address.len = 6;
++    link.type          = NM_LINK_TYPE_DUMMY;
++    g_assert_false(nm_wifi_relay_link_owned(&link, 21, "nm-relay0", mac));
++}
++
++static void
++test_relay_delete_message(void)
++{
++    nm_auto_nlmsg struct nl_msg *msg  = nm_wifi_utils_nl80211_relay_delete_message(42, 25);
++    struct nlmsghdr             *hdr  = nlmsg_hdr(msg);
++    struct genlmsghdr           *genl = genlmsg_hdr(hdr);
++    struct nlattr               *tb[NL80211_ATTR_MAX + 1];
++    g_assert_cmpint(hdr->nlmsg_type, ==, 42);
++    g_assert_cmpint(genl->cmd, ==, NL80211_CMD_DEL_INTERFACE);
++    g_assert_cmpint(nla_parse_arr(tb, genlmsg_attrdata(genl, 0), genlmsg_attrlen(genl, 0), NULL),
++                    ==,
++                    0);
++    g_assert_nonnull(tb[NL80211_ATTR_IFINDEX]);
++    g_assert_cmpint(nla_get_u32(tb[NL80211_ATTR_IFINDEX]), ==, 25);
++    g_assert_null(tb[NL80211_ATTR_WIPHY]);
++    g_assert_null(tb[NL80211_ATTR_IFNAME]);
++}
++
++static int
++relay_test_put_u32(struct nl_msg *msg, int type, guint32 value)
++{
++    return nla_put(msg, type, sizeof(value), &value);
++}
++
++static void
++test_relay_combinations(void)
++{
++    int i;
++
++    for (i = 0; i < 8; i++) {
++        nm_auto_nlmsg struct nl_msg *msg         = nlmsg_alloc(0);
++        struct nlattr               *combination = nla_nest_start(msg, 1);
++        struct nlattr               *limits, *limit, *types;
++        int                          count;
++
++        g_assert_cmpint(
++            relay_test_put_u32(msg, NL80211_IFACE_COMB_MAXNUM, i == 2 ? 1 : (i == 6 ? 3 : 2)),
++            ==,
++            0);
++        g_assert_cmpint(relay_test_put_u32(msg, NL80211_IFACE_COMB_NUM_CHANNELS, i == 3 ? 0 : 1),
++                        ==,
++                        0);
++        limits = nla_nest_start(msg, NL80211_IFACE_COMB_LIMITS);
++        for (count = 0; count < (i >= 6 ? 3 : (i == 0 || i == 2 || i == 3 || i == 5 ? 2 : 1));
++             count++) {
++            limit = nla_nest_start(msg, count + 1);
++            g_assert_cmpint(relay_test_put_u32(msg, NL80211_IFACE_LIMIT_MAX, i == 4 ? 2 : 1),
++                            ==,
++                            0);
++            types = nla_nest_start(msg, NL80211_IFACE_LIMIT_TYPES);
++            if (count == 0)
++                g_assert_cmpint(nla_put(msg, NL80211_IFTYPE_STATION, 0, NULL), ==, 0);
++            if (count == 1 || i == 1 || i == 4) {
++                if (i != 5)
++                    g_assert_cmpint(nla_put(msg, NL80211_IFTYPE_AP, 0, NULL), ==, 0);
++            }
++            if (count == 2)
++                g_assert_cmpint(nla_put(msg, NL80211_IFTYPE_P2P_DEVICE, 0, NULL), ==, 0);
++            nla_nest_end(msg, types);
++            nla_nest_end(msg, limit);
++        }
++        nla_nest_end(msg, limits);
++        nla_nest_end(msg, combination);
++        g_assert_cmpint(
++            nm_wifi_utils_nl80211_relay_combination_supported(combination, i >= 6 ? 1 : 0),
++            ==,
++            i == 0 || i == 4 || i == 6);
++    }
++}
++
+ int
+ main(int argc, char **argv)
+ {
+@@ -1708,5 +1949,11 @@ main(int argc, char **argv)
+ 
+     g_test_add_func("/wifi/ap/check_compatible_band", test_ap_check_compatible_band);
+ 
++    g_test_add_func("/wifi/relay/delete-message", test_relay_delete_message);
++    g_test_add_func("/wifi/relay/owned-interface", test_relay_owned_link);
++    g_test_add_func("/wifi/relay/profile", test_relay_profile);
++    g_test_add_func("/wifi/relay/invalid-profile", test_relay_invalid_profile);
++    g_test_add_func("/wifi/relay/interface-combinations", test_relay_combinations);
++
+     return g_test_run();
+ }
+diff --git a/src/core/nm-manager.c b/src/core/nm-manager.c
+index 7099cb8..1f8cc1c 100644
+--- a/src/core/nm-manager.c
++++ b/src/core/nm-manager.c
+@@ -24,6 +24,7 @@
+ #include "dhcp/nm-dhcp-manager.h"
+ #include "libnm-core-aux-intern/nm-common-macros.h"
+ #include "libnm-core-intern/nm-core-internal.h"
++#include "libnm-core-intern/nm-wifi-relay.h"
+ #include "libnm-glib-aux/nm-c-list.h"
+ #include "libnm-platform/nm-platform.h"
+ #include "libnm-platform/nmp-object.h"
+@@ -2629,6 +2630,17 @@ system_create_virtual_device(NMManager *self, NMConnection *connection, GError *
+         return NULL;
+     }
+ 
++    if (nm_wifi_relay_get_parent(connection)
++        && (!parent || !nm_device_is_real(parent)
++            || nm_device_get_device_type(parent) != NM_DEVICE_TYPE_WIFI
++            || nm_device_get_state(parent) != NM_DEVICE_STATE_ACTIVATED)) {
++        g_set_error_literal(error,
++                            NM_MANAGER_ERROR,
++                            NM_MANAGER_ERROR_DEPENDENCY_FAILED,
++                            "Wi-Fi Relay requires an already active station parent");
++        return NULL;
++    }
++
+     /* See if there's a device that is already compatible with this connection */
+     c_list_for_each_entry (dev_candidate, &priv->devices_lst_head, devices_lst) {
+         if (nm_device_check_connection_compatible(dev_candidate, connection, FALSE, NULL)) {
+@@ -2685,6 +2697,10 @@ system_create_virtual_device(NMManager *self, NMConnection *connection, GError *
+         return device;
+     }
+ 
++    /* Relay kernel resources are realized only after explicit activation authorization. */
++    if (nm_wifi_relay_get_parent(connection))
++        return device;
++
+     if (!find_controller(self, connection, device, NULL, NULL, NULL, error))
+         return device;
+ 
+@@ -5810,6 +5826,17 @@ _internal_activate_device(NMManager *self, NMActiveConnection *active, GError **
+             return FALSE;
+         }
+ 
++        if (nm_wifi_relay_get_parent(nm_settings_connection_get_connection(sett_conn))
++            && (!parent || !nm_device_is_real(parent)
++                || nm_device_get_device_type(parent) != NM_DEVICE_TYPE_WIFI
++                || nm_device_get_state(parent) != NM_DEVICE_STATE_ACTIVATED)) {
++            g_set_error_literal(error,
++                                NM_MANAGER_ERROR,
++                                NM_MANAGER_ERROR_DEPENDENCY_FAILED,
++                                "Wi-Fi Relay will not activate or switch the station parent");
++            return FALSE;
++        }
++
+         if (parent && !nm_device_is_real(parent)) {
+             NMSettingsConnection *parent_con;
+             NMActiveConnection   *parent_ac;
+@@ -8801,7 +8828,7 @@ nm_manager_set_capability(NMManager *self, NMCapability cap)
+     gssize            idx;
+ 
+     g_return_if_fail(NM_IS_MANAGER(self));
+-    if (cap < 1 || cap > _NM_CAPABILITY_MAX)
++    if ((cap < 1 || cap > _NM_CAPABILITY_MAX) && !(cap >= 0x7000 && cap <= 0x7fff))
+         g_return_if_reached();
+ 
+     cap_i = (guint32) cap;
+diff --git a/src/libnm-core-impl/nm-connection.c b/src/libnm-core-impl/nm-connection.c
+index f5245fb..da9b346 100644
+--- a/src/libnm-core-impl/nm-connection.c
++++ b/src/libnm-core-impl/nm-connection.c
+@@ -16,6 +16,7 @@
+ #include "nm-utils.h"
+ #include "nm-setting-private.h"
+ #include "libnm-core-intern/nm-core-internal.h"
++#include "libnm-core-intern/nm-wifi-relay.h"
+ 
+ /**
+  * SECTION:nm-connection
+@@ -1922,6 +1923,9 @@ _nm_connection_verify(NMConnection *connection, GError **error)
+     g_return_val_if_fail(NM_IS_CONNECTION(connection), NM_SETTING_VERIFY_ERROR);
+     g_return_val_if_fail(!error || !*error, NM_SETTING_VERIFY_ERROR);
+ 
++    if (!nm_wifi_relay_verify(connection, error))
++        return NM_SETTING_VERIFY_ERROR;
++
+     priv = NM_CONNECTION_GET_PRIVATE(connection);
+ 
+     if (!_get_setting_by_metatype(priv, NM_META_SETTING_TYPE_CONNECTION)) {
+@@ -3285,6 +3289,9 @@ nm_connection_is_virtual(NMConnection *connection)
+                      NM_SETTING_WIREGUARD_SETTING_NAME))
+         return TRUE;
+ 
++    if (nm_streq(type, NM_SETTING_WIRELESS_SETTING_NAME))
++        return nm_wifi_relay_get_parent(connection) != NULL;
++
+     if (nm_streq(type, NM_SETTING_INFINIBAND_SETTING_NAME)) {
+         NMSettingInfiniband *s_ib;
+ 
+diff --git a/src/libnm-core-intern/nm-wifi-relay.h b/src/libnm-core-intern/nm-wifi-relay.h
+new file mode 100644
+index 0000000..57d646d
+--- /dev/null
++++ b/src/libnm-core-intern/nm-wifi-relay.h
+@@ -0,0 +1,55 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef NM_WIFI_RELAY_H
++#define NM_WIFI_RELAY_H
++
++#include "libnm-core-intern/nm-core-internal.h"
++
++/* Downstream development contract, carried in ordinary user metadata. */
++#define NM_WIFI_RELAY_PARENT_KEY "org.freedesktop.NetworkManager.wifi-relay.parent"
++#define NM_WIFI_RELAY_CAPABILITY 0x7001
++
++static inline const char *
++nm_wifi_relay_get_parent(NMConnection *connection)
++{
++    NMSettingUser *user =
++        NM_SETTING_USER(nm_connection_get_setting(connection, NM_TYPE_SETTING_USER));
++
++    return user ? nm_setting_user_get_data(user, NM_WIFI_RELAY_PARENT_KEY) : NULL;
++}
++
++static inline gboolean
++nm_wifi_relay_verify(NMConnection *connection, GError **error)
++{
++    const char                *parent   = nm_wifi_relay_get_parent(connection);
++    const char                *iface    = nm_connection_get_interface_name(connection);
++    NMSettingWireless         *wifi     = nm_connection_get_setting_wireless(connection);
++    NMSettingWirelessSecurity *security = nm_connection_get_setting_wireless_security(connection);
++    NMSettingIPConfig         *ip4      = nm_connection_get_setting_ip4_config(connection);
++    NMSettingConnection       *s_con    = nm_connection_get_setting_connection(connection);
++
++    if (!parent)
++        return TRUE;
++    if (!nm_utils_ifname_valid_kernel(parent, NULL) || !iface
++        || !nm_utils_ifname_valid_kernel(iface, NULL) || nm_streq(parent, iface) || !wifi
++        || !nm_streq0(nm_setting_wireless_get_mode(wifi), NM_SETTING_WIRELESS_MODE_AP)
++        || !nm_setting_wireless_get_band(wifi)
++        || !NM_IN_STRSET(nm_setting_wireless_get_band(wifi), "bg", "a")
++        || !nm_setting_wireless_get_channel(wifi)
++        || !nm_streq0(nm_setting_wireless_get_cloned_mac_address(wifi), "preserve") || !ip4
++        || !nm_streq0(nm_setting_ip_config_get_method(ip4), NM_SETTING_IP4_CONFIG_METHOD_SHARED)
++        || !security || !nm_streq0(nm_setting_wireless_security_get_key_mgmt(security), "wpa-psk")
++        || nm_setting_wireless_security_get_num_protos(security) != 1
++        || !nm_streq0(nm_setting_wireless_security_get_proto(security, 0), "rsn") || !s_con
++        || nm_setting_connection_get_autoconnect(s_con)) {
++        g_set_error_literal(
++            error,
++            NM_CONNECTION_ERROR,
++            NM_CONNECTION_ERROR_INVALID_PROPERTY,
++            "Wi-Fi Relay requires distinct parent/child interfaces, AP mode, "
++            "a fixed band/channel, preserved AP MAC, WPA2, shared IPv4, and autoconnect disabled");
++        return FALSE;
++    }
++    return TRUE;
++}
++
++#endif
+diff --git a/src/libnm-platform/nm-linux-platform.c b/src/libnm-platform/nm-linux-platform.c
+index 7d4a6f3..88ec57d 100644
+--- a/src/libnm-platform/nm-linux-platform.c
++++ b/src/libnm-platform/nm-linux-platform.c
+@@ -10378,6 +10378,44 @@ wifi_get_station(NMPlatform  *platform,
+     return nm_wifi_utils_get_station(wifi_data, out_bssid, out_quality, out_rate);
+ }
+ 
++static int
++wifi_relay_add(NMPlatform            *platform,
++               int                    parent,
++               const char            *name,
++               guint32                frequency,
++               const guint8          *mac,
++               const NMPlatformLink **out_link)
++{
++    int r, ifindex;
++    WIFI_GET_WIFI_DATA_NETNS(wifi_data, platform, parent, -EOPNOTSUPP);
++
++    r = nm_wifi_utils_relay_add(wifi_data, name, frequency, mac);
++    if (r < 0)
++        return r;
++    ifindex = r;
++    if (ifindex <= 0)
++        return -ENODEV;
++    nm_platform_link_refresh(platform, ifindex);
++    *out_link = nm_platform_link_get(platform, ifindex);
++    if (!*out_link || (*out_link)->type != NM_LINK_TYPE_WIFI || !nm_streq((*out_link)->name, name)
++        || (*out_link)->l_address.len != 6 || memcmp((*out_link)->l_address.data, mac, 6) != 0) {
++        *out_link = NULL;
++        return -ESTALE;
++    }
++    return 0;
++}
++
++static int
++wifi_relay_delete(NMPlatform *platform, int ifindex)
++{
++    int r;
++    WIFI_GET_WIFI_DATA_NETNS(wifi_data, platform, ifindex, -EOPNOTSUPP);
++    r = nm_wifi_utils_relay_delete(wifi_data);
++    if (r >= 0)
++        nm_platform_process_events(platform);
++    return r;
++}
++
+ static _NM80211Mode
+ wifi_get_mode(NMPlatform *platform, int ifindex)
+ {
+@@ -12514,6 +12552,8 @@ nm_linux_platform_class_init(NMLinuxPlatformClass *klass)
+     platform_class->wifi_get_capabilities            = wifi_get_capabilities;
+     platform_class->wifi_get_frequency               = wifi_get_frequency;
+     platform_class->wifi_get_station                 = wifi_get_station;
++    platform_class->wifi_relay_delete                = wifi_relay_delete;
++    platform_class->wifi_relay_add                   = wifi_relay_add;
+     platform_class->wifi_get_mode                    = wifi_get_mode;
+     platform_class->wifi_set_mode                    = wifi_set_mode;
+     platform_class->wifi_set_powersave               = wifi_set_powersave;
+diff --git a/src/libnm-platform/nm-platform.c b/src/libnm-platform/nm-platform.c
+index 27888d6..f042eb3 100644
+--- a/src/libnm-platform/nm-platform.c
++++ b/src/libnm-platform/nm-platform.c
+@@ -3381,6 +3381,33 @@ nm_platform_wifi_get_station(NMPlatform  *self,
+     return klass->wifi_get_station(self, ifindex, out_bssid, out_quality, out_rate);
+ }
+ 
++int
++nm_platform_wifi_relay_delete(NMPlatform *self, int ifindex)
++{
++    _CHECK_SELF(self, klass, -EOPNOTSUPP);
++    g_return_val_if_fail(ifindex > 0, -EINVAL);
++    return klass->wifi_relay_delete ? klass->wifi_relay_delete(self, ifindex) : -EOPNOTSUPP;
++}
++
++int
++nm_platform_wifi_relay_add(NMPlatform            *self,
++                           int                    parent,
++                           const char            *name,
++                           guint32                frequency,
++                           const guint8          *mac,
++                           const NMPlatformLink **out_link)
++{
++    _CHECK_SELF(self, klass, -EOPNOTSUPP);
++
++    g_return_val_if_fail(parent > 0 && name && mac && out_link, -EINVAL);
++    *out_link = NULL;
++    if (nm_platform_link_get_by_ifname(self, name))
++        return -EEXIST;
++    return klass->wifi_relay_add
++               ? klass->wifi_relay_add(self, parent, name, frequency, mac, out_link)
++               : -EOPNOTSUPP;
++}
++
+ _NM80211Mode
+ nm_platform_wifi_get_mode(NMPlatform *self, int ifindex)
+ {
+diff --git a/src/libnm-platform/nm-platform.h b/src/libnm-platform/nm-platform.h
+index 4d46807..f833264 100644
+--- a/src/libnm-platform/nm-platform.h
++++ b/src/libnm-platform/nm-platform.h
+@@ -1290,6 +1290,13 @@ typedef struct {
+     guint32 (*wifi_get_frequency)(NMPlatform *self, int ifindex);
+     int (*wifi_get_quality)(NMPlatform *self, int ifindex);
+     guint32 (*wifi_get_rate)(NMPlatform *self, int ifindex);
++    int (*wifi_relay_delete)(NMPlatform *self, int ifindex);
++    int (*wifi_relay_add)(NMPlatform            *self,
++                          int                    parent,
++                          const char            *name,
++                          guint32                frequency,
++                          const guint8          *mac,
++                          const NMPlatformLink **out_link);
+     _NM80211Mode (*wifi_get_mode)(NMPlatform *self, int ifindex);
+     void (*wifi_set_mode)(NMPlatform *self, int ifindex, _NM80211Mode mode);
+     void (*wifi_set_powersave)(NMPlatform *self, int ifindex, guint32 powersave);
+@@ -2252,6 +2259,14 @@ gboolean     nm_platform_wifi_get_station(NMPlatform  *self,
+                                           NMEtherAddr *out_bssid,
+                                           int         *out_quality,
+                                           guint32     *out_rate);
++int          nm_platform_wifi_relay_delete(NMPlatform *self, int ifindex);
++int          nm_platform_wifi_relay_add(NMPlatform            *self,
++                                        int                    parent,
++                                        const char            *name,
++                                        guint32                frequency,
++                                        const guint8          *mac,
++                                        const NMPlatformLink **out_link);
++
+ _NM80211Mode nm_platform_wifi_get_mode(NMPlatform *self, int ifindex);
+ void         nm_platform_wifi_set_mode(NMPlatform *self, int ifindex, _NM80211Mode mode);
+ void         nm_platform_wifi_set_powersave(NMPlatform *self, int ifindex, guint32 powersave);
+diff --git a/src/libnm-platform/wifi/nm-wifi-utils-nl80211.c b/src/libnm-platform/wifi/nm-wifi-utils-nl80211.c
+index 020c054..29dd9a7 100644
+--- a/src/libnm-platform/wifi/nm-wifi-utils-nl80211.c
++++ b/src/libnm-platform/wifi/nm-wifi-utils-nl80211.c
+@@ -45,6 +45,7 @@ typedef struct {
+     guint32 freq;
+     bool    disabled : 1;
+     bool    no_ir : 1;
++    bool    radar : 1;
+ } Nl80211Freq;
+ 
+ typedef struct {
+@@ -575,6 +576,8 @@ struct nl80211_device_info {
+     gboolean            supported;
+     gboolean            success;
+     gboolean            can_wowlan;
++    gboolean            relay_supported;
++    guint               relay_p2p_devices;
+ };
+ 
+ #define WLAN_CIPHER_SUITE_USE_GROUP 0x000FAC00
+@@ -586,6 +589,49 @@ struct nl80211_device_info {
+ #define WLAN_CIPHER_SUITE_GCMP      0x000FAC08
+ #define WLAN_CIPHER_SUITE_SMS4      0x00147201
+ 
++/* New downstream code is licensed LGPL-2.1-or-later. */
++gboolean
++nm_wifi_utils_nl80211_relay_combination_supported(const struct nlattr *combination,
++                                                  guint                p2p_devices)
++{
++    struct nlattr *tb[NUM_NL80211_IFACE_COMB];
++    struct nlattr *limit;
++    int            rem;
++    gboolean       station = FALSE, ap = FALSE, p2p = FALSE;
++
++    if (nla_parse_nested_arr(tb, combination, NULL) < 0 || !tb[NL80211_IFACE_COMB_MAXNUM]
++        || nla_len(tb[NL80211_IFACE_COMB_MAXNUM]) != 4
++        || nla_get_u32(tb[NL80211_IFACE_COMB_MAXNUM]) < 2 + p2p_devices
++        || !tb[NL80211_IFACE_COMB_NUM_CHANNELS] || nla_len(tb[NL80211_IFACE_COMB_NUM_CHANNELS]) != 4
++        || nla_get_u32(tb[NL80211_IFACE_COMB_NUM_CHANNELS]) < 1 || !tb[NL80211_IFACE_COMB_LIMITS])
++        return FALSE;
++    nla_for_each_nested (limit, tb[NL80211_IFACE_COMB_LIMITS], rem) {
++        struct nlattr *lt[NUM_NL80211_IFACE_LIMIT];
++        struct nlattr *type;
++        int            rem_type;
++        guint          required = 0;
++
++        if (nla_parse_nested_arr(lt, limit, NULL) < 0 || !lt[NL80211_IFACE_LIMIT_MAX]
++            || nla_len(lt[NL80211_IFACE_LIMIT_MAX]) != 4 || !lt[NL80211_IFACE_LIMIT_TYPES])
++            return FALSE;
++        nla_for_each_nested (type, lt[NL80211_IFACE_LIMIT_TYPES], rem_type) {
++            if (nla_type(type) == NL80211_IFTYPE_STATION) {
++                station = TRUE;
++                required++;
++            } else if (nla_type(type) == NL80211_IFTYPE_AP) {
++                ap = TRUE;
++                required++;
++            } else if (nla_type(type) == NL80211_IFTYPE_P2P_DEVICE) {
++                p2p = TRUE;
++                required += p2p_devices;
++            }
++        }
++        if (required > nla_get_u32(lt[NL80211_IFACE_LIMIT_MAX]))
++            return FALSE;
++    }
++    return station && ap && (!p2p_devices || p2p);
++}
++
+ static int
+ nl80211_wiphy_info_handler(const struct nl_msg *msg, void *arg)
+ {
+@@ -658,6 +704,17 @@ nl80211_wiphy_info_handler(const struct nl_msg *msg, void *arg)
+         }
+     }
+ 
++    if (tb[NL80211_ATTR_INTERFACE_COMBINATIONS]) {
++        struct nlattr *combination;
++        int            rem;
++
++        nla_for_each_nested (combination, tb[NL80211_ATTR_INTERFACE_COMBINATIONS], rem) {
++            if (nm_wifi_utils_nl80211_relay_combination_supported(combination,
++                                                                  info->relay_p2p_devices))
++                info->relay_supported = TRUE;
++        }
++    }
++
+     if (tb[NL80211_ATTR_WIPHY_BANDS]) {
+         /* Read supported frequencies */
+ 
+@@ -693,6 +750,7 @@ nl80211_wiphy_info_handler(const struct nl_msg *msg, void *arg)
+                     .freq     = nla_get_u32(tb_freq[NL80211_FREQUENCY_ATTR_FREQ]),
+                     .disabled = !!tb_freq[NL80211_FREQUENCY_ATTR_DISABLED],
+                     .no_ir    = !!tb_freq[NL80211_FREQUENCY_ATTR_NO_IR],
++                    .radar    = !!tb_freq[NL80211_FREQUENCY_ATTR_RADAR],
+                 };
+ 
+                 info->caps |= _NM_WIFI_DEVICE_CAP_FREQ_VALID;
+@@ -827,6 +885,124 @@ nla_put_failure:
+     g_return_val_if_reached(FALSE);
+ }
+ 
++typedef struct {
++    int      phy, parent, count;
++    guint    p2p_devices;
++    gboolean parent_found;
++} RelayInterfaces;
++
++static int
++relay_interfaces_handler(const struct nl_msg *msg, void *arg)
++{
++    RelayInterfaces   *interfaces = arg;
++    struct genlmsghdr *header     = nlmsg_data(nlmsg_hdr(msg));
++    struct nlattr     *tb[NL80211_ATTR_MAX + 1];
++
++    if (nla_parse_arr(tb, genlmsg_attrdata(header, 0), genlmsg_attrlen(header, 0), NULL) < 0)
++        return NL_SKIP;
++    if (tb[NL80211_ATTR_WIPHY] && nla_get_u32(tb[NL80211_ATTR_WIPHY]) == interfaces->phy) {
++        if (tb[NL80211_ATTR_IFINDEX]) {
++            interfaces->count++;
++            if (nla_get_u32(tb[NL80211_ATTR_IFINDEX]) == interfaces->parent)
++                interfaces->parent_found = TRUE;
++        } else if (tb[NL80211_ATTR_IFTYPE]
++                   && nla_get_u32(tb[NL80211_ATTR_IFTYPE]) == NL80211_IFTYPE_P2P_DEVICE)
++            interfaces->p2p_devices++;
++        else
++            interfaces->count++;
++    }
++    return NL_SKIP;
++}
++
++static int
++relay_created_handler(const struct nl_msg *msg, void *arg)
++{
++    struct genlmsghdr *header = nlmsg_data(nlmsg_hdr(msg));
++    struct nlattr     *tb[NL80211_ATTR_MAX + 1];
++
++    if (nla_parse_arr(tb, genlmsg_attrdata(header, 0), genlmsg_attrlen(header, 0), NULL) >= 0
++        && tb[NL80211_ATTR_IFINDEX] && nla_len(tb[NL80211_ATTR_IFINDEX]) == 4)
++        *((int *) arg) = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
++    return NL_SKIP;
++}
++
++struct nl_msg *
++nm_wifi_utils_nl80211_relay_delete_message(guint16 family_id, int ifindex)
++{
++    g_return_val_if_fail(ifindex > 0, NULL);
++    return _nl80211_alloc_msg(family_id, ifindex, -1, NL80211_CMD_DEL_INTERFACE, 0);
++}
++
++static int
++wifi_nl80211_relay_delete(NMWifiUtils *data)
++{
++    NMWifiUtilsNl80211          *self = (NMWifiUtilsNl80211 *) data;
++    nm_auto_nlmsg struct nl_msg *msg =
++        nm_wifi_utils_nl80211_relay_delete_message(self->genl_family_id, data->ifindex);
++    if (!msg)
++        return -ENOMEM;
++    return nl80211_send_and_recv(self, msg, NULL, NULL);
++}
++
++static int
++wifi_nl80211_relay_add(NMWifiUtils *data, const char *name, guint32 frequency, const guint8 *mac)
++{
++    NMWifiUtilsNl80211          *self       = (NMWifiUtilsNl80211 *) data;
++    struct nl80211_device_info   info       = {.self = self};
++    RelayInterfaces              interfaces = {.phy = self->phy, .parent = data->ifindex};
++    nm_auto_nlmsg struct nl_msg *msg        = NULL;
++    gboolean                     permitted  = FALSE;
++    int                          r, i, created_ifindex = 0;
++
++    if (wifi_nl80211_get_mode(data) != _NM_802_11_MODE_INFRA
++        || wifi_nl80211_get_freq(data) != frequency)
++        return -ENOTCONN;
++    nm_clear_pointer(&msg, nlmsg_free);
++    msg = nlmsg_alloc(0);
++    genlmsg_put(msg,
++                NL_AUTO_PORT,
++                NL_AUTO_SEQ,
++                self->genl_family_id,
++                0,
++                NLM_F_DUMP,
++                NL80211_CMD_GET_INTERFACE,
++                0);
++    r = nl80211_send_and_recv(self, msg, relay_interfaces_handler, &interfaces);
++    if (r < 0)
++        return r;
++    if (!interfaces.parent_found || interfaces.count != 1)
++        return -EBUSY;
++    nm_clear_pointer(&msg, nlmsg_free);
++    info.relay_p2p_devices = interfaces.p2p_devices;
++    msg                    = nl80211_alloc_msg(self, NL80211_CMD_GET_WIPHY, 0);
++    r                      = nl80211_send_and_recv(self, msg, nl80211_wiphy_info_handler, &info);
++    if (r >= 0 && info.relay_supported) {
++        for (i = 0; i < info.num_freqs; i++) {
++            if (info.freqs[i].freq == frequency && !info.freqs[i].disabled && !info.freqs[i].no_ir
++                && !info.freqs[i].radar)
++                permitted = TRUE;
++        }
++    }
++    g_free(info.freqs);
++    if (r < 0)
++        return r;
++    if (!permitted)
++        return -EOPNOTSUPP;
++    /* Recheck the station after the preflight queries, before creating resources. */
++    if (wifi_nl80211_get_freq(data) != frequency)
++        return -ENOTCONN;
++    nm_clear_pointer(&msg, nlmsg_free);
++    msg = nl80211_alloc_msg(self, NL80211_CMD_NEW_INTERFACE, 0);
++    NLA_PUT_STRING(msg, NL80211_ATTR_IFNAME, name);
++    NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, NL80211_IFTYPE_AP);
++    NLA_PUT(msg, NL80211_ATTR_MAC, 6, mac);
++    r = nl80211_send_and_recv(self, msg, relay_created_handler, &created_ifindex);
++    return r < 0 ? r : (created_ifindex > 0 ? created_ifindex : -ENODEV);
++
++nla_put_failure:
++    return -ENOMEM;
++}
++
+ static void
+ nm_wifi_utils_nl80211_init(NMWifiUtilsNl80211 *self)
+ {}
+@@ -839,6 +1015,8 @@ nm_wifi_utils_nl80211_class_init(NMWifiUtilsNl80211Class *klass)
+ 
+     object_class->dispose = dispose;
+ 
++    wifi_utils_class->relay_delete                = wifi_nl80211_relay_delete;
++    wifi_utils_class->relay_add                   = wifi_nl80211_relay_add;
+     wifi_utils_class->get_mode                    = wifi_nl80211_get_mode;
+     wifi_utils_class->set_mode                    = wifi_nl80211_set_mode;
+     wifi_utils_class->set_powersave               = wifi_nl80211_set_powersave;
+diff --git a/src/libnm-platform/wifi/nm-wifi-utils-nl80211.h b/src/libnm-platform/wifi/nm-wifi-utils-nl80211.h
+index 094c0ff..eabdc1c 100644
+--- a/src/libnm-platform/wifi/nm-wifi-utils-nl80211.h
++++ b/src/libnm-platform/wifi/nm-wifi-utils-nl80211.h
+@@ -22,6 +22,11 @@
+ #define NM_WIFI_UTILS_NL80211_GET_CLASS(obj) \
+     (G_TYPE_INSTANCE_GET_CLASS((obj), NM_TYPE_WIFI_UTILS_NL80211, NMWifiUtilsNl80211Class))
+ 
++gboolean nm_wifi_utils_nl80211_relay_combination_supported(const struct nlattr *combination,
++                                                           guint                p2p_devices);
++
++struct nl_msg *nm_wifi_utils_nl80211_relay_delete_message(guint16 family_id, int ifindex);
++
+ GType nm_wifi_utils_nl80211_get_type(void);
+ 
+ NMWifiUtils *nm_wifi_utils_nl80211_new(struct nl_sock *genl, guint16 genl_family_id, int ifindex);
+diff --git a/src/libnm-platform/wifi/nm-wifi-utils-private.h b/src/libnm-platform/wifi/nm-wifi-utils-private.h
+index abec38e..b7ccd1b 100644
+--- a/src/libnm-platform/wifi/nm-wifi-utils-private.h
++++ b/src/libnm-platform/wifi/nm-wifi-utils-private.h
+@@ -15,6 +15,9 @@ typedef struct {
+ 
+     gboolean (*set_mode)(NMWifiUtils *data, const _NM80211Mode mode);
+ 
++    int (*relay_delete)(NMWifiUtils *data);
++    int (*relay_add)(NMWifiUtils *data, const char *name, guint32 frequency, const guint8 *mac);
++
+     /* Set power saving mode on an interface */
+     gboolean (*set_powersave)(NMWifiUtils *data, guint32 powersave);
+ 
+diff --git a/src/libnm-platform/wifi/nm-wifi-utils.c b/src/libnm-platform/wifi/nm-wifi-utils.c
+index 596ff64..4024454 100644
+--- a/src/libnm-platform/wifi/nm-wifi-utils.c
++++ b/src/libnm-platform/wifi/nm-wifi-utils.c
+@@ -143,6 +143,21 @@ nm_wifi_utils_get_station(NMWifiUtils *data,
+     return NM_WIFI_UTILS_GET_CLASS(data)->get_station(data, out_bssid, out_quality, out_rate);
+ }
+ 
++int
++nm_wifi_utils_relay_add(NMWifiUtils *data, const char *name, guint32 frequency, const guint8 *mac)
++{
++    NMWifiUtilsClass *klass = NM_WIFI_UTILS_GET_CLASS(data);
++
++    return klass->relay_add ? klass->relay_add(data, name, frequency, mac) : -EOPNOTSUPP;
++}
++
++int
++nm_wifi_utils_relay_delete(NMWifiUtils *data)
++{
++    NMWifiUtilsClass *klass = NM_WIFI_UTILS_GET_CLASS(data);
++    return klass->relay_delete ? klass->relay_delete(data) : -EOPNOTSUPP;
++}
++
+ gboolean
+ nm_wifi_utils_is_wifi(int dirfd, const char *ifname)
+ {
+diff --git a/src/libnm-platform/wifi/nm-wifi-utils.h b/src/libnm-platform/wifi/nm-wifi-utils.h
+index 0532817..f521d63 100644
+--- a/src/libnm-platform/wifi/nm-wifi-utils.h
++++ b/src/libnm-platform/wifi/nm-wifi-utils.h
+@@ -34,6 +34,10 @@ _NM80211Mode nm_wifi_utils_get_mode(NMWifiUtils *data);
+ 
+ gboolean nm_wifi_utils_set_mode(NMWifiUtils *data, const _NM80211Mode mode);
+ 
++int nm_wifi_utils_relay_delete(NMWifiUtils *data);
++int
++nm_wifi_utils_relay_add(NMWifiUtils *data, const char *name, guint32 frequency, const guint8 *mac);
++
+ /* Returns frequency in MHz */
+ guint32 nm_wifi_utils_get_freq(NMWifiUtils *data);
+ 

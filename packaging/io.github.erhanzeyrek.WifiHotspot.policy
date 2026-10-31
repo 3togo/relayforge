@@ -2,38 +2,13 @@
 <!DOCTYPE policyconfig PUBLIC
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
-<!--
-  RelayForge policy for the pinned Wi-Fi Relay interface.
-
-  The pinned upstream file uses a single action with allow_active=auth_admin, which
-  asks for an administrator password on every protected call: opening the settings
-  window, saving a change and each Start/Stop.
-
-  This file splits the two different privileges:
-
-  * "manage" covers routine operation - Start, Stop, SwitchBandAndReconnect and
-    PrepareFirewall. The active local session may use it without a prompt, so the
-    desktop controls behave like an ordinary toggle.
-
-  * "credentials" covers GetConfig and SetConfig. Both expose or rewrite the stored
-    configuration, which contains the hotspot password. They require the caller to
-    authenticate as themselves (auth_self_keep: retained for about five minutes), so a
-    process in the session cannot read the password silently; at worst it can provoke
-    a prompt the user will see.
-
-  allow_any and allow_inactive stay "no" for both: remote sessions, non-foreground
-  seats and non-local callers remain denied.
-
-  The pinned file in vendor/wifi-relay/ is left byte-identical; this file replaces it
-  at package time.
--->
 <policyconfig>
-  <vendor>Wi-Fi Relay</vendor>
-  <vendor_url>https://github.com/3togo/gnome-wifi-hotspot</vendor_url>
+  <vendor>RelayForge</vendor>
+  <vendor_url>https://github.com/3togo/relayforge</vendor_url>
 
-  <action id="io.github.erhanzeyrek.WifiHotspot.manage">
-    <description>Start or stop Wi-Fi Hotspot</description>
-    <message>Authentication is required to start or stop Wi-Fi Hotspot</message>
+  <action id="io.github.erhanzeyrek.WifiHotspot.control">
+    <description>Start or stop the configured Wi-Fi Hotspot</description>
+    <message>Control Wi-Fi Hotspot</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
@@ -41,13 +16,13 @@
     </defaults>
   </action>
 
-  <action id="io.github.erhanzeyrek.WifiHotspot.credentials">
-    <description>Read or change Wi-Fi Hotspot settings</description>
-    <message>Authentication is required to read or change the Wi-Fi Hotspot configuration, which contains its password</message>
+  <action id="io.github.erhanzeyrek.WifiHotspot.manage">
+    <description>Manage Wi-Fi Hotspot</description>
+    <message>Authentication is required to view credentials or configure Wi-Fi Hotspot</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
-      <allow_active>auth_self_keep</allow_active>
+      <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>
 </policyconfig>

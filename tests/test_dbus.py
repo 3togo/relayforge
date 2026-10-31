@@ -57,9 +57,9 @@ def connect():
         None, None)
 
 
-def call(bus, method, params=None, interface=BUS_NAME):
+def call(bus, method, params=None, interface=BUS_NAME, flags=Gio.DBusCallFlags.NONE):
     return bus.call_sync(BUS_NAME, OBJECT_PATH, interface, method, params, None,
-                         Gio.DBusCallFlags.NONE, 5000, None)
+                         flags, 5000, None)
 
 
 def wait_for(predicate, seconds=5):
@@ -283,12 +283,17 @@ class CompatibilityTests(unittest.TestCase):
         with fake_polkit() as observed, running('--demo-polkit') as (bus, _):
             decode_reply('GetConfig', call(bus, 'GetConfig'))
             self.assertEqual(observed[0][0], ('system-bus-name', {'name': bus.get_unique_name()}))
-            # The configuration holds the password: it is a separate privilege from
-            # routine operation, so a session process cannot read it silently.
-            self.assertEqual(observed[0][1], BUS_NAME + '.credentials')
+            self.assertEqual(observed[0][1], BUS_NAME + '.manage')
+            self.assertEqual(observed[0][3], 0)
+
+    def test_interactive_authorization_requires_explicit_message_flag(self):
+        with fake_polkit() as observed, running('--demo-polkit') as (bus, _):
+            call(bus, 'GetConfig', flags=Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION)
             self.assertEqual(observed[0][3], 1)
-            self.assertTrue(decode_reply('Start', call(bus, 'Start'))['success'])
-            self.assertEqual(observed[1][1], BUS_NAME + '.manage')
+            call(bus, 'Start')
+            call(bus, 'Stop')
+            self.assertEqual([r[1] for r in observed[1:]], [BUS_NAME+'.control'] * 2)
+            self.assertEqual([r[3] for r in observed[1:]], [0, 0])
 
     def test_polkit_denial_and_unavailable_authority_fail_closed(self):
         with fake_polkit(False), running('--demo-polkit') as (bus, _):

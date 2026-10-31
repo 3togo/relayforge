@@ -113,6 +113,17 @@ class TrayFeedbackTests(unittest.TestCase):
         self.assertIn('Access denied', self.labels())
         self.app._error.assert_called_once_with('Access denied')
 
+    def test_tray_start_stop_and_poll_never_allow_interactive_auth(self):
+        from gi.repository import Gio
+        self.app._render = Mock(); self.app._query = Mock()
+        for method in ('Start', 'Stop'):
+            self.app._request_change(method)
+            self.assertEqual(self.app.proxy.call.call_args.args[2], Gio.DBusCallFlags.NONE)
+        self.app.busy = False
+        tray.HotspotTray._query(self.app)
+        self.assertEqual(self.app.proxy.call.call_args.args[0], 'GetStatus')
+        self.assertEqual(self.app.proxy.call.call_args.args[2], Gio.DBusCallFlags.NONE)
+
     def test_unavailable_service_explains_disabled_switch(self):
         self.app.status = {'active': False, 'unavailable': True}
         self.app._render()

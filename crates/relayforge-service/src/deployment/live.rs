@@ -96,6 +96,7 @@ impl Gate {
 #[serde(rename_all = "snake_case")]
 enum Phase {
     Prepared,
+    Stopping,
     Files,
     Starting,
     Ready,
@@ -406,7 +407,8 @@ async fn execute(root: Root, action: &str, source: Option<&str>, fixture: bool) 
         materialize(&root, &record.transaction.current)?;
         configuration(&root, &record.transaction.backend)?;
         record.transaction.aborting = true;
-        record.phase = Phase::Prepared;
+        // Keep startup/shutdown ownership across an abort, including a second
+        // interruption while a systemd job is still running.
         save_live(&root, &record)?;
         fault(fixture, &root, "live-abort-journal")?;
     }
@@ -433,12 +435,19 @@ async fn continue_handover(
             &record.transaction.current.files,
             Some(&record.transaction.pending.as_ref().unwrap().files),
         )?;
+        evidence(root)?;
+        if matches!(record.phase, Phase::Starting | Phase::Stopping) {
+            manager.drain(&record.transaction, root.uid, record.phase == Phase::Starting).await?;
+        }
         // A restarted/new service is also required to enter maintenance before stop.
         manager.quiesce(&record.transaction, root.uid).await?;
         manager.mask(&UNITS).await?;
         manager.reload().await?;
         fault(fixture, root, "live-masked")?;
-        manager.stop_all().await?;
+        record.phase = Phase::Stopping;
+        save_live(root, record)?;
+        fault(fixture, root, "live-stop-intent")?;
+        manager.drain(&record.transaction, root.uid, false).await?;
         fault(fixture, root, "live-stopped")?;
         let locks = quiescent(root, true, fixture)?;
         record.phase = Phase::Files;
@@ -476,15 +485,21 @@ async fn continue_handover(
             evidence(root)?;
             let locks = quiescent(root, true, fixture)?;
             drop(locks);
+            record.phase = Phase::Starting;
+            save_live(root, record)?;
+            fault(fixture, root, "live-restart-intent")?;
             manager.start(unit).await?;
             manager
                 .ready(unit, target.files[SERVICE].as_ref().unwrap(), root.uid)
                 .await?;
+            record.phase = Phase::Ready;
+            save_live(root, record)?;
         }
-        manager
+        let owner = manager
             .verify_process(unit, target.files[SERVICE].as_ref().unwrap(), root.uid)
             .await?;
-        manager.maintenance(false).await?;
+        fault(fixture, root, "live-verified")?;
+        manager.maintenance(&owner, false).await?;
     } else {
         manager.no_owner().await?;
     }

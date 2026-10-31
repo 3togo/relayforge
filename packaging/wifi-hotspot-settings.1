@@ -1,0 +1,29 @@
+.TH WIFI-HOTSPOT-SETTINGS 1 "" "RelayForge" "User Commands"
+.SH NAME
+wifi-hotspot-settings \- configure RelayForge Wi-Fi sharing
+.SH SYNOPSIS
+.B wifi-hotspot-settings
+.RB [ --standalone | --about ]
+.SH DESCRIPTION
+Opens the GTK settings editor, or an integrated GNOME Wi-Fi panel when its
+RelayForge integration marker is installed. Run as the desktop user.
+Sharing and protected configuration changes require service authorization.
+.SH OPTIONS
+.TP
+.B --standalone
+Open the editor directly, including when GNOME integration is available.
+.TP
+.B --about
+Show RelayForge version, project links and component credits without reading
+protected configuration or contacting the hotspot service.
+.SH OPTIONAL CONTROLS
+The relayforge-tray companion provides wifi-hotspot-tray. Launching it explicitly
+shows the icon. Login startup honors saved startup and visibility preferences.
+Quit stops sharing before exiting; closing the settings editor leaves sharing
+running. A desktop with AppIndicator support is required for the tray icon.
+.SH FILES
+.I /etc/wifi-hotspot.conf
+is an explicitly initialized administrator-owned configuration.
+Per-user desktop preferences are retained on package removal.
+.SH SEE ALSO
+.BR relayforge-service (8)
