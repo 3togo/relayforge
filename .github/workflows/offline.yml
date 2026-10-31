@@ -15,7 +15,9 @@ concurrency:
 jobs:
   offline:
     runs-on: ubuntu-latest
-    container: ubuntu:26.10
+    container:
+      image: ubuntu:26.10
+      options: --init
     timeout-minutes: 30
     steps:
       - name: Prepare the disposable build environment

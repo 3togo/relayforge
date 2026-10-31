@@ -614,7 +614,11 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             if !path.exists() {
                 return Ok(None);
             }
-            let stat = fs::read_to_string(path.join("stat")).map_err(|_| e)?;
+            let stat = match fs::read_to_string(path.join("stat")) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(e),
+            };
             if stat
                 .rsplit_once(')')
                 .is_some_and(|(_, s)| s.split_whitespace().next() == Some("Z"))
@@ -624,33 +628,43 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             return Err(e);
         }
     };
-    let path = PathBuf::from(format!("/proc/{pid}"));
-    let uid = fs::metadata(&path)
-        .map_err(|_| "Cannot inspect child user")?
-        .uid();
-    let exe = fs::read_link(path.join("exe"))
-        .map_err(|_| "Cannot inspect child executable")?
-        .to_str()
-        .ok_or("Invalid child executable")?
-        .trim_end_matches(" (deleted)")
-        .to_owned();
-    let mut bytes = Vec::new();
-    File::open(path.join("cmdline"))
-        .and_then(|f| f.take(16385).read_to_end(&mut bytes))
-        .map_err(|_| "Cannot inspect child arguments")?;
-    if bytes.len() > 16384 || bytes.is_empty() {
-        return Err("Invalid child arguments");
-    }
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
-    let args = text
-        .trim_end_matches('\0')
-        .split('\0')
-        .map(str::to_owned)
-        .collect();
+    observe_birth(birth)
+}
+fn observe_birth(birth: Birth) -> Result<Option<Observed>> {
+    let pid = birth.pid;
+    let inspection: Result<_> = (|| {
+        let path = PathBuf::from(format!("/proc/{pid}"));
+        let uid = fs::metadata(&path)
+            .map_err(|_| "Cannot inspect child user")?
+            .uid();
+        let exe = fs::read_link(path.join("exe"))
+            .map_err(|_| "Cannot inspect child executable")?
+            .to_str()
+            .ok_or("Invalid child executable")?
+            .trim_end_matches(" (deleted)")
+            .to_owned();
+        let mut bytes = Vec::new();
+        File::open(path.join("cmdline"))
+            .and_then(|f| f.take(16385).read_to_end(&mut bytes))
+            .map_err(|_| "Cannot inspect child arguments")?;
+        if bytes.len() > 16384 || bytes.is_empty() {
+            return Err("Invalid child arguments");
+        }
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
+        let args = text
+            .trim_end_matches('\0')
+            .split('\0')
+            .map(str::to_owned)
+            .collect();
+        Ok((uid, exe, hash, args))
+    })();
+    // A process can exit between any of the /proc reads. Preserve inspection
+    // errors only while the captured process is still alive.
     if !birth.live()? {
         return Ok(None);
     }
+    let (uid, exe, hash, args) = inspection?;
     Ok(Some(Observed {
         uid,
         identity: Identity {
@@ -1279,6 +1293,30 @@ pub(crate) async fn finish_instance_cleanup(marker: &Path, fixture: Option<&Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observation_accepts_exit_after_birth_capture() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let birth = Birth::capture(child.id()).unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(observe_birth(birth).unwrap().is_none());
+    }
+    #[test]
+    fn observation_preserves_live_process_identity() {
+        let pid = std::process::id();
+        let birth = Birth::capture(pid).unwrap();
+        let observed = observe_birth(birth.clone()).unwrap().unwrap();
+        assert_eq!(observed.identity.pid, pid);
+        assert_eq!(observed.identity.starttime, birth.start);
+        assert_eq!(observed.uid, unsafe { libc::geteuid() });
+        assert_eq!(
+            observed.identity.exe,
+            std::env::current_exe().unwrap().to_str().unwrap()
+        );
+    }
     #[test]
     fn forwarding_link_addresses_do_not_relax_ap_mac_validation() {
         for address in [String::new(), vec!["ab"; 20].join(":"), vec!["ab"; 32].join(":")] {
