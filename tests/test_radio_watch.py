@@ -18,7 +18,7 @@ gi.require_version('Gio', '2.0')
 from gi.repository import Gio, GLib
 
 from test_dbus import ROOT, call, connect, decode_reply, running, wait_for
-from test_networkmanager import Bench
+from test_networkmanager import Bench, bench as networkmanager_bench
 
 TEST = 'io.github.relayforge.TestNetworkManager'
 NM = 'org.freedesktop.NetworkManager'
@@ -70,6 +70,46 @@ class RadioWatchTests(unittest.TestCase):
             self.assertFalse(status['active'])
             self.assertFalse(status.get('desired_active'))
             self.assertFalse(context.events('activation-request'))
+
+    def test_radio_off_after_networkmanager_restart_stops_new_sharing(self):
+        with networkmanager_bench() as (context, original), context.service() as (bus, _):
+            # Confirm the watcher subscribed to the first provider before
+            # replacing it; a startup sleep could hide the original bug.
+            service_owner = bus.call_sync(
+                'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                'GetNameOwner', GLib.Variant('(s)', ('io.github.erhanzeyrek.WifiHotspot',)),
+                None, Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
+
+            def subscribed():
+                rules = bus.call_sync(
+                    'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                    'org.freedesktop.DBus.Debug.Stats', 'GetAllMatchRules', None,
+                    None, Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
+                return any("member='PropertiesChanged'" in rule and
+                           f"path='{NM_ROOT}'" in rule for rule in rules.get(service_owner, []))
+
+            wait_for(subscribed)
+            original.terminate()
+            original.communicate(timeout=5)
+            with subprocess.Popen(
+                    ['/usr/bin/python3', str(ROOT / 'tests/fake_networkmanager.py'), str(context.path)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE) as replacement:
+                try:
+                    ready, _, _ = select.select([replacement.stdout], [], [], 5)
+                    self.assertTrue(ready, 'Replacement NetworkManager did not become ready')
+                    self.assertEqual(replacement.stdout.readline(), b'ready\n')
+                    started = decode_reply('Start', call(bus, 'Start'))
+                    self.assertTrue(started['success'], started)
+                    wait_for(lambda: decode_reply('GetStatus', call(bus, 'GetStatus'))['active'])
+                    self.radio(bus, False)
+                    wait_for(lambda: not decode_reply('GetStatus', call(bus, 'GetStatus'))['active'],
+                             seconds=10)
+                    self.assertFalse(decode_reply('GetStatus', call(bus, 'GetStatus')).get('desired_active'))
+                    context.assert_clean(self)
+                finally:
+                    replacement.terminate()
+                    _, stderr = replacement.communicate(timeout=5)
+                    self.assertNotIn(b'Traceback', stderr)
 
     def test_a_radio_signal_from_a_foreign_sender_is_ignored(self):
         """Only NetworkManager may order a stop, never another desktop client."""
