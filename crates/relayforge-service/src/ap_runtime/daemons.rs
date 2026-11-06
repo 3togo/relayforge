@@ -613,6 +613,14 @@ async fn enabled(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<bool>
     }
 }
 pub(super) async fn run(p: &Platform, dir: &Directory) -> Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| "Cannot register daemon supervisor termination signal")?;
+    tokio::select! {
+        result = run_inner(p, dir) => result,
+        _ = terminate.recv() => Err("AP daemon supervisor stopped"),
+    }
+}
+async fn run_inner(p: &Platform, dir: &Directory) -> Result<()> {
     let _lock = dir.transaction_lock(c".daemons.lock").await?;
     let (data, _) = snapshot(p, dir)?;
     let (mut m, bytes) = read(p, dir, &data)?.ok_or("Configure AP daemons before launch")?;

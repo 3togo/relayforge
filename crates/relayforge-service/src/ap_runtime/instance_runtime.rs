@@ -4,8 +4,9 @@ use super::*;
 use relayforge_core::config::{self, Config};
 use std::os::unix::fs::DirBuilderExt;
 use tokio::{
-    process::Command,
+    process::{Child, Command},
     signal::unix::{signal, SignalKind},
+    time::timeout,
 };
 
 #[derive(Debug, PartialEq)]
@@ -277,6 +278,7 @@ async fn start(
     marker: &Path,
     band: &str,
     channel: &str,
+    runner: &mut Option<Child>,
 ) -> Result<()> {
     for operation in ["radio-check", "interface-create", "device-release"] {
         action(p, operation, path, &[]).await?;
@@ -324,15 +326,20 @@ async fn start(
     } else {
         command.arg("--create-ap-runtime");
     }
-    let status = command
-        .args(["daemons-run", path.to_str().ok_or("Invalid daemon path")?])
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| "Cannot start native daemon runner")?
+    *runner = Some(
+        command
+            .args(["daemons-run", path.to_str().ok_or("Invalid daemon path")?])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|_| "Cannot start native daemon runner")?,
+    );
+    let status = runner
+        .as_mut()
+        .unwrap()
         .wait()
         .await
         .map_err(|_| "Cannot wait for native daemon runner")?;
@@ -341,6 +348,27 @@ async fn start(
     } else {
         Err("Native daemon runner failed")
     }
+}
+async fn stop_runner(runner: &mut Option<Child>) -> Result<()> {
+    let Some(mut child) = runner.take() else {
+        return Ok(());
+    };
+    if let Some(pid) = child.id() {
+        // This unreaped direct child retains its PID. Let its signal handler
+        // finish synchronous journal writes before dropping the running future.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        match timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(result) => {
+                result.map_err(|_| "Cannot reap native daemon runner")?;
+            }
+            Err(_) => {
+                child.kill().await.map_err(|_| "Cannot kill native daemon runner")?;
+            }
+        }
+    }
+    Ok(())
 }
 fn known(name: &str, fixture: bool) -> bool {
     [
@@ -578,12 +606,18 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
                 .map_err(|_| "Cannot register instance failure signal")?;
             let (config, root, token) = options(p, &config, &marker, &band, &channel, bridge)?;
             let path = publish(p, &config, &marker, &token).await?;
+            // Keep the child outside the cancellable startup future: dropping
+            // that future must not SIGKILL the runner during an atomic write.
+            let mut runner = None;
             let result = tokio::select! {
-                result = start(p, &path, &root, &marker, &band, &channel) => result,
+                result = start(p, &path, &root, &marker, &band, &channel, &mut runner) => result,
                 _ = stop.recv() => Ok(()), _ = term.recv() => Ok(()), _ = interrupt.recv() => Ok(()),
                 _ = fail.recv() => Err("Native instance failure signal"),
             };
-            cleanup(p, &path).await?;
+            let stopped = stop_runner(&mut runner).await;
+            let cleaned = cleanup(p, &path).await;
+            stopped?;
+            cleaned?;
             result
         }
     }
@@ -592,6 +626,36 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cancelled_wait_keeps_runner_for_graceful_stop() {
+        let directory =
+            std::env::temp_dir().join(format!("relayforge-runner-{}", random_secret().unwrap()));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let ready = directory.join("ready");
+        let finished = directory.join("finished");
+        let mut runner = Some(Command::new("/bin/sh")
+                .args(["-c", "trap 'printf complete > \"$2\"; exit 0' TERM; touch \"$1\"; while :; do sleep 0.01; done", "runner"])
+                .arg(&ready).arg(&finished).kill_on_drop(true).spawn().unwrap());
+        timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            timeout(Duration::from_millis(10), runner.as_mut().unwrap().wait())
+                .await
+                .is_err()
+        );
+        stop_runner(&mut runner).await.unwrap();
+        assert!(runner.is_none());
+        assert_eq!(fs::read_to_string(finished).unwrap(), "complete");
+        fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn native_options_are_complete_unique_and_literal() {
         let input = [
