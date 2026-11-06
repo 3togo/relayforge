@@ -40,6 +40,9 @@ are no host filesystem, system-bus, display, GPU or USB passthroughs. Guest
 root is used only inside that VM. The VM is powered off in `finally`, including
 on test failures; interrupted outer processes still require checking that the
 specific QEMU process has stopped before discarding its files.
+Host-side setup and transfer commands have a two-minute deadline. Cleanup bounds
+the SSH poweroff request, waits for guest shutdown, and escalates to termination
+and then kill if the owned QEMU process remains alive.
 
 The guest exercises apt dependency resolution, idle upgrade, downgrade,
 backend replacement, D-Bus/systemd activation, root Polkit authorization,

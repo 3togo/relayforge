@@ -20,7 +20,27 @@ HERE = Path(__file__).resolve().parent
 
 
 def run(args, **kw):
+    kw.setdefault('timeout', 120)
     return subprocess.run(args, check=True, **kw)
+
+
+def stop_vm(vm, ssh):
+    """Bound shutdown and escalate signals when the owned VM does not exit."""
+    try:
+        subprocess.run(ssh+['sudo poweroff'], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    finally:
+        try:
+            vm.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            vm.terminate()
+            try:
+                vm.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                vm.kill()
+                vm.wait(timeout=10)
 
 
 def main():
@@ -44,7 +64,8 @@ def main():
                'image_sha256': hashlib.file_digest(image.open('rb'), 'sha256').hexdigest(),
                'packages': {str(f.relative_to(packages)): hashlib.sha256(f.read_bytes()).hexdigest()
                             for f in packages.rglob('*.deb')}}
-    chain = json.loads(subprocess.check_output(['qemu-img', 'info', '--backing-chain', '--output=json', str(image)]))
+    chain = json.loads(run(['qemu-img', 'info', '--backing-chain', '--output=json', str(image)],
+                          capture_output=True, text=True).stdout)
     receipt['image_chain'] = [{'filename': n['filename'], 'sha256': hashlib.file_digest(Path(n['filename']).open('rb'), 'sha256').hexdigest()} for n in chain]
     (out/'inputs.json').write_text(json.dumps(receipt, indent=2)+'\n')
     run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(out/'key')])
@@ -86,7 +107,8 @@ users:
             while time.monotonic() < deadline:
                 assert vm.poll() is None, 'VM exited; inspect qemu.log'
                 ready = subprocess.run(ssh+['test -f /run/relayforge-validation-guest'],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       timeout=10)
                 if ready.returncode == 0: break
                 time.sleep(2)
             else: raise RuntimeError('Guest SSH readiness timeout')
@@ -99,10 +121,7 @@ users:
             if result.returncode: raise RuntimeError('Guest qualification failed; inspect guest.log')
             assert json.loads((out/'results/report.json').read_text())['complete']
         finally:
-            subprocess.run(ssh+['sudo poweroff'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            try: vm.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                vm.terminate(); vm.wait(timeout=10)
+            stop_vm(vm, ssh)
     print(out/'results/report.json')
 
 
