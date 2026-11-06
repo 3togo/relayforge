@@ -1,0 +1,163 @@
+{
+  "date_utc": "2026-10-31",
+  "source": {
+    "base_revision": "d62bce8bad87234e4f8ebab903966afb7e382ea8",
+    "base_tree": "360b613e3d4214b406fe7967475f8634035dd9f2",
+    "tracked_implementation_patch_sha256": "90b028147f863e906e9172033a8fff5ed861b9cb30c3899b15db3038bc5d6818",
+    "untracked_source_files": {
+      "tests/test_package_hooks.py": "d0b242d0166be1fa5c37ea5e8c8c1e59e68f81352601db0d307988122863706f"
+    },
+    "source_manifest_sha256": "428d6729c9304dc53a8a7c44607ce5a0b520796f7b4d1d991523a7150f149ae5",
+    "binary_sha256": "b6dc8ec1190e0e4eb227b03c29e958efd2e7cf349240ab4b5b670d94ea444fe7",
+    "cargo_lock_sha256": "7fb6a6b4039eea0db367208676a40c83cab180d425ca862e17525b90145fedc0"
+  },
+  "build_environment": {
+    "os_release": "PRETTY_NAME=\"Ubuntu 26.10\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.10\"\nVERSION=\"26.10 (Stonking Stingray)\"\nVERSION_CODENAME=stonking\nRELEASE_TYPE=stable\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nDOCUMENTATION_URL=\"https://docs.ubuntu.com\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nLOGO=ubuntu-logo\nVENDOR_NAME=\"Canonical\"\nVENDOR_URL=\"https://canonical.com/\"\nUBUNTU_CODENAME=stonking\n",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (built from a source tarball)"
+  },
+  "rust_test_summaries": [
+    "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "focused_test_summaries": [
+    "Ran 14 tests in 2.861s",
+    "OK"
+  ],
+  "guest": {
+    "os_release": "PRETTY_NAME=\"Ubuntu 26.10\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.10\"\nVERSION=\"26.10 (Stonking Stingray)\"\nVERSION_CODENAME=stonking\nRELEASE_TYPE=stable\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nDOCUMENTATION_URL=\"https://docs.ubuntu.com\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nLOGO=ubuntu-logo\nVENDOR_NAME=\"Canonical\"\nVENDOR_URL=\"https://canonical.com/\"\nUBUNTU_CODENAME=stonking\n",
+    "checks": [
+      "apt-create_ap-1",
+      "enablement-preserved-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "apt-create_ap-2",
+      "enablement-preserved-create_ap-2",
+      "no-install-activation-create_ap-2",
+      "activation-create_ap-2",
+      "systemd-create_ap-2",
+      "root-polkit-create_ap-2",
+      "unprivileged-credential-denial-create_ap-2",
+      "apt-create_ap-1",
+      "enablement-preserved-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "remove-running-create_ap",
+      "reinstall-create_ap",
+      "apt-networkmanager-2",
+      "enablement-preserved-networkmanager-2",
+      "no-install-activation-networkmanager-2",
+      "activation-networkmanager-2",
+      "systemd-networkmanager-2",
+      "root-polkit-networkmanager-2",
+      "unprivileged-credential-denial-networkmanager-2",
+      "active-local-password-free-control-policy",
+      "desktop",
+      "desktop-does-not-request-protected-config",
+      "companion-remove",
+      "companion-reinstall",
+      "remove",
+      "remove-running-networkmanager",
+      "purge",
+      "explicit-config-preserved"
+    ],
+    "packages": {
+      "create_ap-2/relayforge-gnome_0.1.2~qualification2_all.deb": "30cc739c1229f0b0817a4f447e62104dc79f73e3c3a3569402355ca6e5f4732b",
+      "create_ap-2/relayforge-tray_0.1.2~qualification2_all.deb": "e16a96853f38a3e9551e60e037de103098d1b55862e473c73cfdeccf1c025e14",
+      "create_ap-2/relayforge_0.1.2~qualification2_amd64.deb": "d09742b6aec57d61680ab595585c3ccf1321e254afcce66385892d8626082e94",
+      "networkmanager-2/relayforge-gnome_0.1.2~qualification2_all.deb": "a4857c50e1711130c3a623b9863c3a511ee69f2ef2eb0a36b7d92eb722f95521",
+      "networkmanager-2/relayforge-tray_0.1.2~qualification2_all.deb": "1f3cdd16bca3018976aa0d033a2b41341c9927ce2f569550927507b72cf6989f",
+      "networkmanager-2/relayforge_0.1.2~qualification2_amd64.deb": "006e4bf2030e7fd790f27ab7f9b1af29124f10e00de33806214cef04a406eba5",
+      "create_ap-1/relayforge-gnome_0.1.2~qualification1_all.deb": "365d35b138f9e186566983ee8bbc692a64095081660aef3133982824bfda98b3",
+      "create_ap-1/relayforge_0.1.2~qualification1_amd64.deb": "89d43821caf41874d213a364311166d5c1dae958de698bb2fc5158ff15dd714a",
+      "create_ap-1/relayforge-tray_0.1.2~qualification1_all.deb": "e281b0fae1c346d4eeeac7ada52a7291284ebe9d475279d681c36d206b5bbfd3"
+    },
+    "versions": "dbus 1.16.2-5ubuntu2\ngnome-shell 51.0-2ubuntu3\nlibgtk-3-0t64 3.24.52-0ubuntu1\nlibgtk-4-1 4.24.1+ds-1\npolkitd 127-3ubuntu1\npython3 3.14.7-3\nsystemd 261.3-0ubuntu3\n",
+    "complete": true
+  },
+  "harness_sha256": {
+    "probe.js": "d4c28459b94075f8c973aeeed7439489b504dccb4591aaae76d0af5a7869a779",
+    "desktop.sh": "19e084e2e9096c44fe4518198ffdce4fc0f786d7b4bc214f276d9256bc4011bf",
+    "guest.py": "115582298ffd85f779330932998bae36b57e5d812e459a2ab59b3eba47200747",
+    "run.py": "7e7313afea6e52bb2fefd67def36360515853a2eb64c310a1c9c7a1ca3719f0d"
+  },
+  "image_chain_sha256": [
+    "b8773558686b62ce3f0129e6f4b489e36d718178ad474f5084f1c1015ca5614d",
+    "6c28ee308c1d8e62f37fced6badf97f89e3751481a014de4e9628412a1d83964",
+    "91e9f267f966bb727dd1b71b7cfeb5ad672d03db39a234a5c6aba1b57ce4cfe9",
+    "da10517cb368c4a9cf3f80ffd4628005a7ea1d95893123016e2c194f3ce8a5d8",
+    "640e206ee05890b4f7333aba32bb05b9d8bacffc33ffdcff20388f09b679245a",
+    "a021682aff9c0d455315230f229138e4d1413c5bce96ec336e453a69086d9c2f"
+  ],
+  "packages": {
+    "create_ap-2/relayforge_0.1.2~qualification2_amd64.deb": {
+      "sha256": "d09742b6aec57d61680ab595585c3ccf1321e254afcce66385892d8626082e94",
+      "bytes": 4868972,
+      "version": "0.1.2~qualification2"
+    },
+    "create_ap-2/relayforge-gnome_0.1.2~qualification2_all.deb": {
+      "sha256": "30cc739c1229f0b0817a4f447e62104dc79f73e3c3a3569402355ca6e5f4732b",
+      "bytes": 7658,
+      "version": "0.1.2~qualification2"
+    },
+    "create_ap-2/relayforge-tray_0.1.2~qualification2_all.deb": {
+      "sha256": "e16a96853f38a3e9551e60e037de103098d1b55862e473c73cfdeccf1c025e14",
+      "bytes": 6872,
+      "version": "0.1.2~qualification2"
+    },
+    "create_ap-1/relayforge_0.1.2~qualification1_amd64.deb": {
+      "sha256": "89d43821caf41874d213a364311166d5c1dae958de698bb2fc5158ff15dd714a",
+      "bytes": 4868972,
+      "version": "0.1.2~qualification1"
+    },
+    "create_ap-1/relayforge-tray_0.1.2~qualification1_all.deb": {
+      "sha256": "e281b0fae1c346d4eeeac7ada52a7291284ebe9d475279d681c36d206b5bbfd3",
+      "bytes": 6876,
+      "version": "0.1.2~qualification1"
+    },
+    "create_ap-1/relayforge-gnome_0.1.2~qualification1_all.deb": {
+      "sha256": "365d35b138f9e186566983ee8bbc692a64095081660aef3133982824bfda98b3",
+      "bytes": 7662,
+      "version": "0.1.2~qualification1"
+    },
+    "networkmanager-2/relayforge_0.1.2~qualification2_amd64.deb": {
+      "sha256": "006e4bf2030e7fd790f27ab7f9b1af29124f10e00de33806214cef04a406eba5",
+      "bytes": 2568678,
+      "version": "0.1.2~qualification2"
+    },
+    "networkmanager-2/relayforge-gnome_0.1.2~qualification2_all.deb": {
+      "sha256": "a4857c50e1711130c3a623b9863c3a511ee69f2ef2eb0a36b7d92eb722f95521",
+      "bytes": 7660,
+      "version": "0.1.2~qualification2"
+    },
+    "networkmanager-2/relayforge-tray_0.1.2~qualification2_all.deb": {
+      "sha256": "1f3cdd16bca3018976aa0d033a2b41341c9927ce2f569550927507b72cf6989f",
+      "bytes": 6874,
+      "version": "0.1.2~qualification2"
+    }
+  },
+  "host_observations": {
+    "raw_equal": false,
+    "equal_excluding_address_lease_lifetimes": true,
+    "routes_equal": true,
+    "active_connection_identities_equal": true
+  },
+  "excluded_runs": {
+    "run1": "Invalid qualification: retained fixture packages consumed instead of candidate packages.",
+    "run2": "Diagnostic failure: retained fixture packages consumed; running create_ap service survived package removal."
+  },
+  "limits": [
+    "No physical radios or client traffic.",
+    "No active-sharing upgrade, interactive Unlock-agent completion, suspend/resume, or driver qualification.",
+    "Only Ubuntu 26.10 and GNOME Shell 51 qualified.",
+    "Documentation ledger updates follow the tested implementation patch."
+  ],
+  "private_evidence_sha256": "522e9f202ebd28a3019383f0aea4508d028666772a332f15e484f35222b7f4cb"
+}

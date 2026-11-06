@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Destructive qualification inside the marked, disposable QEMU guest only."""
 import ast
+import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -57,7 +59,17 @@ def require_guest():
 
 def main():
     require_guest()
-    results = {'os_release': Path('/etc/os-release').read_text(), 'checks': []}
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--packages', type=Path, required=True)
+    parser.add_argument('--manifest', type=Path, required=True)
+    args = parser.parse_args()
+    packages_root = args.packages.resolve(strict=True)
+    actual_packages = {str(p.relative_to(packages_root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in packages_root.rglob('*.deb')}
+    if actual_packages != json.loads(args.manifest.read_text()):
+        raise RuntimeError('Guest package hashes do not match the supplied manifest')
+    results = {'os_release': Path('/etc/os-release').read_text(), 'checks': [],
+               'packages': actual_packages}
     out = Path('/home/ubuntu/results')
     if out.exists():
         out.rename(out.with_name('results-previous-'+str(time.time_ns())))
@@ -81,13 +93,18 @@ def main():
     run('apt-get', 'install', '-y', '--no-install-recommends', 'gnome-shell',
         'gnome-session', 'dbus-x11', 'mesa-utils', 'libgl1-mesa-dri',
         'xwayland', 'xvfb', 'xauth', 'policykit-1-gnome', timeout=600)
-    for series in ('create_ap-1', 'create_ap-2', 'create_ap-1', 'networkmanager-2'):
-        packages = sorted(Path('/home/ubuntu/packages', series).glob('*.deb'))
+    enabled = False
+    for stage, series in enumerate(('create_ap-1', 'create_ap-2', 'create_ap-1', 'networkmanager-2')):
+        unit = 'relayforge-native' if series.startswith('networkmanager') else 'relayforge-create-ap'
+        packages = sorted((packages_root / series).glob('*.deb'))
         assert len(packages) == 3
         # Every operation uses apt's actual dependency resolver, including rollback.
         check('apt-'+series, lambda: run('apt-get', 'install', '-y',
               '-o', 'Dpkg::Options::=--force-confold',
               '--allow-downgrades', *map(str, packages), timeout=600))
+        state = run('systemctl', 'is-enabled', unit, ok=False).stdout.strip()
+        assert state == ('enabled' if enabled else 'disabled'), state
+        results['checks'].append('enablement-preserved-'+series)
         if baseline is not None:
             assert Path('/etc/wifi-hotspot.conf').read_bytes() == baseline
             assert autostart.read_text().endswith('Hidden=true\n')
@@ -114,7 +131,6 @@ def main():
             # preserve the existing private configuration rather than rewrite it.
             config.write_bytes(config.read_bytes().replace(b'BACKEND=create_ap', b'BACKEND=networkmanager'))
             baseline = config.read_bytes()
-        unit = 'relayforge-native' if series.startswith('networkmanager') else 'relayforge-create-ap'
         run('systemctl', 'stop', 'relayforge-native.service', 'relayforge-create-ap.service', ok=False)
         bus = ['gdbus', 'call', '--system', '--dest', 'io.github.erhanzeyrek.WifiHotspot',
                '--object-path', '/io/github/erhanzeyrek/WifiHotspot', '--method']
@@ -126,6 +142,24 @@ def main():
                      'io.github.erhanzeyrek.WifiHotspot.GetConfig', ok=False)
         assert denied.returncode and 'AccessDenied' in denied.stdout
         results['checks'].append('unprivileged-credential-denial-'+series)
+        if stage == 0:
+            # An administrator's explicit enable survives upgrade; disabling
+            # after that upgrade must also survive rollback.
+            run('systemctl', 'enable', unit)
+            enabled = True
+        elif stage == 1:
+            run('systemctl', 'disable', unit)
+            enabled = False
+        if stage == 2:
+            check('remove-running-create_ap', lambda: run('apt-get', 'remove', '-y',
+                  'relayforge', 'relayforge-tray', 'relayforge-gnome'))
+            assert run('systemctl', 'is-active', unit, ok=False).returncode != 0
+            owner = run('gdbus', 'call', '--system', '--dest', 'org.freedesktop.DBus',
+                        '--object-path', '/org/freedesktop/DBus', '--method',
+                        'org.freedesktop.DBus.NameHasOwner', 'io.github.erhanzeyrek.WifiHotspot')
+            assert 'false' in owner.stdout
+            check('reinstall-create_ap', lambda: run('apt-get', 'install', '-y',
+                  '-o', 'Dpkg::Options::=--force-confold', *map(str, packages), timeout=600))
         run('systemctl', 'stop', unit)
     check('active-local-password-free-control-policy', verify_local_policy)
     with (out/'desktop-dbus.log').open('w') as buslog:
@@ -141,19 +175,25 @@ def main():
     assert 'member=GetStatus' in traffic and 'member=GetCapabilities' in traffic
     assert 'member=GetConfig' not in traffic and 'member=SetConfig' not in traffic
     results['checks'].append('desktop-does-not-request-protected-config')
-    run('systemctl', 'stop', 'relayforge-native.service')
+    run('systemctl', 'is-active', 'relayforge-native.service')
     saved = Path('/etc/wifi-hotspot.conf').read_bytes()
     check('companion-remove', lambda: run('apt-get', 'remove', '-y',
                                           'relayforge-tray', 'relayforge-gnome'))
     assert Path('/usr/lib/relayforge/relayforge-service').exists()
     assert not Path('/usr/bin/wifi-hotspot-tray').exists()
     check('companion-reinstall', lambda: run('apt-get', 'install', '-y',
-          *map(str, sorted(Path('/home/ubuntu/packages/networkmanager-2').glob('*.deb')))))
+          *map(str, sorted((packages_root / 'networkmanager-2').glob('*.deb')))))
     assert autostart.read_text().endswith('Hidden=true\n')
     assert Path('/etc/wifi-hotspot.conf').read_bytes() == saved
 
     check('remove', lambda: run('apt-get', 'remove', '-y', 'relayforge',
                                'relayforge-tray', 'relayforge-gnome'))
+    assert run('systemctl', 'is-active', 'relayforge-native.service', ok=False).returncode != 0
+    owner = run('gdbus', 'call', '--system', '--dest', 'org.freedesktop.DBus',
+                '--object-path', '/org/freedesktop/DBus', '--method',
+                'org.freedesktop.DBus.NameHasOwner', 'io.github.erhanzeyrek.WifiHotspot')
+    assert 'false' in owner.stdout
+    results['checks'].append('remove-running-networkmanager')
     assert Path('/etc/wifi-hotspot.conf').read_bytes() == saved
     assert prefs.exists()
     assert not Path('/usr/bin/wifi-hotspot-tray').exists()

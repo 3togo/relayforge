@@ -69,6 +69,10 @@ def main():
     receipt['image_chain'] = [{'filename': n['filename'], 'sha256': hashlib.file_digest(Path(n['filename']).open('rb'), 'sha256').hexdigest()} for n in chain]
     (out/'inputs.json').write_text(json.dumps(receipt, indent=2)+'\n')
     run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(out/'key')])
+    token = hashlib.sha256((out/'key.pub').read_bytes()).hexdigest()[:16]
+    guest_packages = '/home/ubuntu/relayforge-validation-packages-'+token
+    package_manifest = out/'packages.json'
+    package_manifest.write_text(json.dumps(receipt['packages'], indent=2)+'\n')
     (out/'user-data').write_text('''#cloud-config
 ssh_pwauth: false
 write_files:
@@ -112,14 +116,21 @@ users:
                 if ready.returncode == 0: break
                 time.sleep(2)
             else: raise RuntimeError('Guest SSH readiness timeout')
-            run(scp+['-r', str(packages), 'ubuntu@127.0.0.1:packages'])
+            # scp nests a directory inside an existing destination. A reused
+            # guest may retain older packages, so use a fresh path every time.
+            run(ssh+['test ! -e '+guest_packages+' && test ! -e '+guest_packages+'.json'])
+            run(scp+['-r', str(packages), 'ubuntu@127.0.0.1:'+guest_packages])
+            run(scp+[str(package_manifest), 'ubuntu@127.0.0.1:'+guest_packages+'.json'])
             run(scp+[str(harness/'guest.py'), str(harness/'desktop.sh'), str(harness/'probe.js'), 'ubuntu@127.0.0.1:'])
             with (out/'guest.log').open('w') as guestlog:
-                result = subprocess.run(ssh+['sudo python3 /home/ubuntu/guest.py'],
+                result = subprocess.run(ssh+['sudo python3 /home/ubuntu/guest.py --packages '+guest_packages+
+                                             ' --manifest '+guest_packages+'.json'],
                                         stdout=guestlog, stderr=subprocess.STDOUT, timeout=1800)
             run(scp+['-r', 'ubuntu@127.0.0.1:results', str(out)])
             if result.returncode: raise RuntimeError('Guest qualification failed; inspect guest.log')
-            assert json.loads((out/'results/report.json').read_text())['complete']
+            report = json.loads((out/'results/report.json').read_text())
+            assert report['complete']
+            assert report['packages'] == receipt['packages'], 'Guest package identity mismatch'
         finally:
             stop_vm(vm, ssh)
     print(out/'results/report.json')

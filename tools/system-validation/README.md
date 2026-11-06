@@ -49,6 +49,11 @@ backend replacement, D-Bus/systemd activation, root Polkit authorization,
 unprivileged credential denial, settings/tray startup, real GNOME Shell
 extension loading, removal/purge, and configuration/preferences preservation. Purge uses real dpkg after apt
 removal, since a removed local-only package may no longer be resolvable by apt.
+Fresh installation must leave the selected service disabled. The guest explicitly
+enables create_ap before upgrading, then disables it before rollback, and checks
+that both choices survive. It also removes each backend while its service is
+running idle and verifies that the service and D-Bus owner disappear. These checks
+do not start a hotspot or exercise an upgrade during active sharing.
 The desktop uses software rendering and virtual displays. No sharing is
 started. This does not certify physical AP operation, an interactive Polkit
 agent prompt, active-hotspot upgrades, or every declared GNOME version.
@@ -60,7 +65,11 @@ before and after the run establish that the test did not change the live
 station connection; they are private operational records.
 
 The runner freezes all four executable harness files and records their hashes
-before boot. Do not replace guest scripts during a run. A stopped disk created
+before boot. Each run copies packages into a new guest directory and verifies
+every package against the host's SHA-256 manifest before any package operations.
+The guest report must match that manifest too. This prevents a reused guest's
+retained fixture packages from being mistaken for the new candidate.
+Do not replace guest scripts during a run. A stopped disk created
 by this harness may be reused to avoid repeating dependency downloads: all
 backing-image hashes are recorded, a new cloud-init instance/key is used, and
 only a recognized rftest0 configuration may be reset. Previous guest reports

@@ -36,7 +36,7 @@ the original Python/JavaScript component still supplies the behavior.
 | Sleep and resume of an authorized request | Native logind intent and cleanup | Controlled suspend/resume with real adapters |
 | Fresh random credentials | Native explicit initializer | Distribution initialization/lifecycle integration |
 | Exact factory-template password rotation and obsolete wlan0 repair | Explicit native offline migration helper added | CLI/storage tests passed; staged deployment and package adoption remain; no live writes |
-| Install, upgrade, remove, purge and optional controls | Basic Debian builder; native offline/live deployment machinery | Disposable package/system lifecycle matrix and user-data policy |
+| Install, upgrade, remove, purge and optional controls | Debian builder and native deployment machinery; merged-source lifecycle requalified with 39 VM checks, preserved enablement and removal of either running idle backend | Active-sharing upgrades and other distributions remain unqualified; see committed-system-qualification-20261106.md |
 | Source/dependency provenance and checksums | Cargo lock, pinned vendor/import manifests and validation receipts | Unified export and CI evidence generation |
 | AppStream/About/manpages/source exports | RelayForge AppStream/manpages, package-version About, reproducible committed-source archive and receipt implemented | Installed desktop/catalog presentation; no original release history or hardware claims inherited |
 | RPM packaging recipe | Assessed and deferred; original README also labels RPM builds unvalidated | Select and validate a target distribution before claiming support; see packaging-support.md |

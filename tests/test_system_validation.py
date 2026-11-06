@@ -1,5 +1,6 @@
 """Safety gates for the opt-in destructive OS qualification harness."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +13,20 @@ spec.loader.exec_module(guest)
 
 
 class GuestGuardTests(unittest.TestCase):
+    def test_stale_guest_packages_are_rejected_before_package_operations(self):
+        with tempfile.TemporaryDirectory() as d:
+            packages = Path(d) / 'packages'
+            packages.mkdir()
+            (packages / 'candidate.deb').write_bytes(b'old retained package')
+            manifest = Path(d) / 'manifest.json'
+            manifest.write_text(json.dumps({'candidate.deb': 'different-candidate-hash'}))
+            with patch.object(guest, 'require_guest'), patch.object(guest, 'run') as run, \
+                    patch('sys.argv', ['guest.py', '--packages', str(packages),
+                                       '--manifest', str(manifest)]):
+                with self.assertRaisesRegex(RuntimeError, 'package hashes'):
+                    guest.main()
+                run.assert_not_called()
+
     def test_ordinary_user_cannot_enter_package_checks(self):
         with patch.object(guest.os, 'geteuid', return_value=1000), patch.object(guest, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'guest root'):

@@ -46,10 +46,13 @@ The actual VM packages use `0.1.0~system1` and `0.1.0~system2` fixture versions,
 not published releases. All nine package hashes, sizes, dependencies, final
 harness hashes, exact OS/package versions and check names are recorded in
 [`native-system-integration-validation.json`](native-system-integration-validation.json).
-This report describes that historical candidate. The current tree also includes
-incoming AP lifecycle and package maintainer-hook changes plus the merged desktop
-adapter. It no longer matches that tested receipt; the final merged tree requires
-a fresh disposable OS qualification before transferring these conclusions.
+This report describes that historical candidate. The subsequent merged AP,
+desktop and package-hook changes were qualified separately on 2026-10-31;
+see [the merged-source report](merged-system-qualification-20261031.md) for its
+exact candidate, corrected harness and 39 passing checks. Keep these receipts
+separate rather than transferring this older candidate's results to later code.
+The [committed-package rerun on 2026-11-06](committed-system-qualification-20261106.md)
+subsequently passed the same 39-check matrix with fresh package identities.
 
 The original Ubuntu cloud image was the 20261019 amd64 build, SHA-256
 `a021682aff9c0d455315230f229138e4d1413c5bce96ec336e453a69086d9c2f`.
