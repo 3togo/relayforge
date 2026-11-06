@@ -37,7 +37,7 @@ impl Gate {
     ) -> fdo::Result<bool> {
         let interface = connection
             .object_server()
-            .interface::<_, crate::Service>(OBJECT_PATH)
+            .interface::<_, crate::service::Service>(OBJECT_PATH)
             .await?;
         let enabled = interface.get().await.maintenance.load(Ordering::SeqCst);
         Ok(enabled)
@@ -62,7 +62,7 @@ impl Gate {
         }
         let interface = connection
             .object_server()
-            .interface::<_, crate::Service>(OBJECT_PATH)
+            .interface::<_, crate::service::Service>(OBJECT_PATH)
             .await?;
         let service = interface.get().await;
         let _operation = service

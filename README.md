@@ -46,6 +46,18 @@ interrupted aborts, runtime exclusion, recovery syncing and rollback preflight.
 The compatibility mode retains the original Python engine. These native modes
 are not yet validated production replacements.
 
+## Service source layout
+
+The service entry point in `crates/relayforge-service/src/main.rs` selects the
+command or service mode. `cli.rs` handles standalone deployment, configuration
+and radio commands before the service claims a bus name. `service.rs` owns sharing
+operations and lifecycle state; `service/dbus.rs` defines the compatible desktop
+API and its authorization requirements. `service/runtime.rs` constructs the
+backends, completes recovery, starts background tasks and coordinates shutdown.
+The service's suspend/resume and radio watchers live in `service/power.rs` and
+`service/radio_watch.rs`. Backend and deployment implementations remain separate
+modules shared by the commands and running service.
+
 ## Build and check
 
 Build/tests require Rust 1.97+, Cargo, Python 3.11+ with PyGObject/Gio, and dbus-run-session.

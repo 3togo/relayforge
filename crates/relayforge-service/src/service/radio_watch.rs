@@ -4,7 +4,7 @@
 //! switch changes. Losing the radio invalidates every owned AP, so the service stops
 //! sharing instead of reporting a stale active state. Suspend already owns its own
 //! cleanup, so a stop is suppressed while the logind watcher is mid-sleep.
-use crate::Service;
+use super::Service;
 use futures_util::StreamExt;
 use relayforge_core::{Method, OBJECT_PATH};
 use serde_json::Value;

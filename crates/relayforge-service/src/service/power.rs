@@ -1,7 +1,7 @@
 //! logind sleep coordination. Intent is memory-only and never authorizes a new upstream.
 use crate::{
     networkmanager::{self, Upstream},
-    Service,
+    service::Service,
 };
 use futures_util::StreamExt;
 use relayforge_core::{config::Config, Lifecycle, Method, Status, OBJECT_PATH};
