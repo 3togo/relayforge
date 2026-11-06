@@ -1,5 +1,9 @@
 # Committed package lifecycle qualification
 
+The later [669175f qualification](qualification-669175f-20261106.md) records a
+fresh 39-check installed-system rerun and physical Wi-Fi/suspend validation.
+The results below remain evidence for the earlier package-hook commit.
+
 On 2026-11-06 (UTC), packages from committed source
 `e2a0ebc346930e48d5b67d1d66c90cdc13e1a44d` passed all 39 installed-system
 checks in a fresh disposable Ubuntu 26.10 KVM overlay. In particular, removing
