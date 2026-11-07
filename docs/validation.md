@@ -1,7 +1,7 @@
 # First Rust service milestone: validation
 
 For the later installed-system and physical Wi-Fi/suspend results, see
-[qualification of 669175f](qualification-669175f-20261106.md). The milestone
+[qualification of 9526f6d](qualification-9526f6d-20261107.md). The milestone
 results below retain their original source identity and scope.
 
 Validated on 21 October 2026 against source commit
