@@ -19,8 +19,15 @@ class Actor {
 }
 class Item {
     constructor(text) { this.label = {text}; }
-    connect() {}
-    setToggleState(value) { this.state = value; }
+    connect(signal, callback) {
+        this.signals ??= {};
+        this.signals[signal] = callback;
+    }
+    setToggleState(value) {
+        if (this.state === value) return;
+        this.state = value;
+        this.signals?.toggled?.(this, value);
+    }
     setSensitive(value) { this.sensitive = value; }
 }
 let query, start, stop;
@@ -54,6 +61,21 @@ assert.match(tray._icon.style_class, /hotspot-tray-off/);
 assert.equal(tray._switch.sensitive, true);
 
 extension._indicator = {_toggle: toggle};
+// GNOME emits toggled on status synchronization as well as user changes.
+const originalToggle = toggle._onToggleClicked;
+let actions = 0;
+toggle._onToggleClicked = () => actions++;
+for (const status of [
+    {active: false}, {active: true}, {active: true},
+    {active: false, desired_active: true, state: 'connecting'}, {active: false},
+]) tray.update(status, [], false);
+assert.equal(actions, 0, 'Status updates must not start or stop the hotspot');
+tray._switch.setToggleState(true);
+assert.equal(actions, 1, 'User changes must still invoke the hotspot action');
+tray.update({active: false}, [], false);
+assert.equal(actions, 1, 'Restoring service status must not invoke an action');
+toggle._onToggleClicked = originalToggle;
+
 for (const menu of [tray.menu, toggle.menu]) {
     menu.items.find(item => item.label === 'About').action();
 }

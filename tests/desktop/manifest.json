@@ -47,8 +47,8 @@
     "tests/desktop/test_tray.mjs": {
       "source": "tests/test_tray.mjs",
       "source_sha256": "ddd96b35ba3672ca2ef3b1ae2ce7fd1d09c0dc0ac8ed48ed1180c4f11d05ea9a",
-      "sha256": "be28c6dd9454be9c32133362335b041dec38fa95bb0048a73bd1d34a23933a75",
-      "adaptation": "Exercise the maintained GNOME controller and add persistent failure/guidance checks"
+      "sha256": "ab47ae0184850f39d5f2e66444b174611422e9497810fce689b77cc9704797b9",
+      "adaptation": "Exercise the maintained GNOME controller, persistent failure guidance and status synchronization without hotspot actions"
     }
   }
 }

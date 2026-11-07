@@ -632,7 +632,7 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
 }
 fn observe_birth(birth: Birth) -> Result<Option<Observed>> {
     let pid = birth.pid;
-    let inspection: Result<_> = (|| {
+    let inspected = birth.inspect(|| {
         let path = PathBuf::from(format!("/proc/{pid}"));
         let uid = fs::metadata(&path)
             .map_err(|_| "Cannot inspect child user")?
@@ -658,13 +658,10 @@ fn observe_birth(birth: Birth) -> Result<Option<Observed>> {
             .map(str::to_owned)
             .collect();
         Ok((uid, exe, hash, args))
-    })();
-    // A process can exit between any of the /proc reads. Preserve inspection
-    // errors only while the captured process is still alive.
-    if !birth.live()? {
+    })?;
+    let Some((uid, exe, hash, args)) = inspected else {
         return Ok(None);
-    }
-    let (uid, exe, hash, args) = inspection?;
+    };
     Ok(Some(Observed {
         uid,
         identity: Identity {
