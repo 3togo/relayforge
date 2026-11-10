@@ -4,8 +4,9 @@ use super::*;
 use relayforge_core::config::{self, Config};
 use std::os::unix::fs::DirBuilderExt;
 use tokio::{
-    process::Command,
+    process::{Child, Command},
     signal::unix::{signal, SignalKind},
+    time::timeout,
 };
 
 #[derive(Debug, PartialEq)]
@@ -16,6 +17,7 @@ enum Options {
         marker: PathBuf,
         band: String,
         channel: String,
+        bridge: bool,
     },
 }
 fn parse(args: &[String]) -> Result<Options> {
@@ -38,7 +40,7 @@ fn parse(args: &[String]) -> Result<Options> {
                     .ok_or("Missing native instance option value")?
                     .clone()
             }
-            "--daemon" | "--no-haveged" => String::new(),
+            "--daemon" | "--no-haveged" | "--allow-existing-bridge" => String::new(),
             _ => return Err("Unsupported native instance option"),
         };
         if values.insert(name, value).is_some() {
@@ -46,6 +48,7 @@ fn parse(args: &[String]) -> Result<Options> {
         }
         index += 1;
     }
+    let bridge = values.remove("--allow-existing-bridge").is_some();
     if values.len() != 6 || !values.contains_key("--daemon") || !values.contains_key("--no-haveged")
     {
         return Err("Incomplete native instance options");
@@ -61,6 +64,7 @@ fn parse(args: &[String]) -> Result<Options> {
         return Err("Invalid native instance radio plan");
     }
     Ok(Options::Start {
+        bridge,
         config: values
             .remove("--config")
             .ok_or("Missing native config")?
@@ -87,6 +91,7 @@ fn options(
     marker: &Path,
     band: &str,
     channel: &str,
+    bridge: bool,
 ) -> Result<(Config, Directory, String)> {
     let root = p.fixture.as_deref().unwrap_or(Path::new("/run/relayforge"));
     directory(root, true)?;
@@ -118,13 +123,16 @@ fn options(
         return Err("Explicit instance credentials are required");
     }
     let config = config::validate(&raw)?;
+    relayforge_core::ap_policy::security(&config)?;
     if config["BACKEND"] != "create_ap"
-        || config["SHARE_METHOD"] == "bridge"
-        || config.contains_key("COUNTRY")
+        || (config["SHARE_METHOD"] == "bridge") != bridge
         || config["CHANNEL"] != channel
         || config["FREQ_BAND"] != band
     {
         return Err("Unsupported or changed frozen instance plan");
+    }
+    if bridge {
+        network::bridge::validate_config(&config)?;
     }
     for name in [
         marker.file_name().unwrap().to_str().unwrap().to_string(),
@@ -136,7 +144,7 @@ fn options(
     }
     Ok((config, dir, token.into()))
 }
-fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<PathBuf> {
+async fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<PathBuf> {
     private_mkdir(p.root.parent().ok_or("Missing engine parent")?)?;
     private_mkdir(&p.root)?;
     let engine = Directory::open(&p.root)?;
@@ -154,7 +162,7 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
         .create(&temporary)
         .map_err(|_| "Instance allocation already exists or is unavailable")?;
     let dir = Directory::open(&temporary)?;
-    let result = (|| {
+    let result = async {
         let mut fields: BTreeMap<String, String> = FIELDS
             .iter()
             .map(|v| (v.to_string(), String::new()))
@@ -176,8 +184,19 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
             ("NO_VIRT", &config["NO_VIRT"]),
             ("SHARE_METHOD", &config["SHARE_METHOD"]),
             (
+                "BRIDGE_IFACE",
+                if config["SHARE_METHOD"] == "bridge" {
+                    &config["INTERNET_IFACE"]
+                } else {
+                    ""
+                },
+            ),
+            (
                 "NO_DNS",
-                if config["NO_DNS"] == "1" || config["NO_DNSMASQ"] == "1" {
+                if config["SHARE_METHOD"] == "bridge"
+                    || config["NO_DNS"] == "1"
+                    || config["NO_DNSMASQ"] == "1"
+                {
                     "1"
                 } else {
                     "0"
@@ -218,6 +237,9 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
         }
         data.validate(p, &destination)?;
         dir.write("recovery.json", &data, None)?;
+        if config["SHARE_METHOD"] == "bridge" {
+            network::bridge::prepare(p, &dir, &data, config).await?;
+        }
         dir.write_bytes("pid", format!("{}\n", data.owner.pid).as_bytes(), None)?;
         let source = filename(temporary.file_name().unwrap().to_str().unwrap())?;
         let target = filename(&name)?;
@@ -238,10 +260,11 @@ fn publish(p: &Platform, config: &Config, marker: &Path, token: &str) -> Result<
             .sync_all()
             .map_err(|_| "Cannot sync published instance")?;
         Ok(destination)
-    })();
+    }
+    .await;
     if result.is_err() && temporary.is_dir() {
         // Only the newly allocated unpublished records can be discarded. No recursion.
-        for name in ["pid", "recovery.json"] {
+        for name in ["pid", "recovery.json", "bridge.json"] {
             let _ = fs::remove_file(temporary.join(name));
         }
         let _ = fs::remove_dir(&temporary);
@@ -255,6 +278,7 @@ async fn start(
     marker: &Path,
     band: &str,
     channel: &str,
+    runner: &mut Option<Child>,
 ) -> Result<()> {
     for operation in ["radio-check", "interface-create", "device-release"] {
         action(p, operation, path, &[]).await?;
@@ -287,7 +311,7 @@ async fn start(
         action(p, "firewall-add", path, &["dns".into()]).await?;
     }
     let config = daemons::frozen(p, &data)?;
-    if config["NO_DNSMASQ"] == "0" {
+    if config["SHARE_METHOD"] != "bridge" && config["NO_DNSMASQ"] == "0" {
         action(p, "firewall-add", path, &["dhcp".into()]).await?;
     }
     marker_root.write_bytes(
@@ -302,15 +326,20 @@ async fn start(
     } else {
         command.arg("--create-ap-runtime");
     }
-    let status = command
-        .args(["daemons-run", path.to_str().ok_or("Invalid daemon path")?])
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| "Cannot start native daemon runner")?
+    *runner = Some(
+        command
+            .args(["daemons-run", path.to_str().ok_or("Invalid daemon path")?])
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|_| "Cannot start native daemon runner")?,
+    );
+    let status = runner
+        .as_mut()
+        .unwrap()
         .wait()
         .await
         .map_err(|_| "Cannot wait for native daemon runner")?;
@@ -320,12 +349,34 @@ async fn start(
         Err("Native daemon runner failed")
     }
 }
+async fn stop_runner(runner: &mut Option<Child>) -> Result<()> {
+    let Some(mut child) = runner.take() else {
+        return Ok(());
+    };
+    if let Some(pid) = child.id() {
+        // This unreaped direct child retains its PID. Let its signal handler
+        // finish synchronous journal writes before dropping the running future.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        match timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(result) => {
+                result.map_err(|_| "Cannot reap native daemon runner")?;
+            }
+            Err(_) => {
+                child.kill().await.map_err(|_| "Cannot kill native daemon runner")?;
+            }
+        }
+    }
+    Ok(())
+}
 fn known(name: &str, fixture: bool) -> bool {
     [
         "recovery.json",
         "radio.json",
         "device.json",
         "interface.json",
+        "bridge.json",
         "daemons.json",
         "pid",
         "wifi_iface",
@@ -542,6 +593,7 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
             marker,
             band,
             channel,
+            bridge,
         } => {
             // Register before publishing any state or starting network operations.
             let mut stop = signal(SignalKind::user_defined1())
@@ -552,14 +604,20 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
                 .map_err(|_| "Cannot register instance interrupt signal")?;
             let mut fail = signal(SignalKind::user_defined2())
                 .map_err(|_| "Cannot register instance failure signal")?;
-            let (config, root, token) = options(p, &config, &marker, &band, &channel)?;
-            let path = publish(p, &config, &marker, &token)?;
+            let (config, root, token) = options(p, &config, &marker, &band, &channel, bridge)?;
+            let path = publish(p, &config, &marker, &token).await?;
+            // Keep the child outside the cancellable startup future: dropping
+            // that future must not SIGKILL the runner during an atomic write.
+            let mut runner = None;
             let result = tokio::select! {
-                result = start(p, &path, &root, &marker, &band, &channel) => result,
+                result = start(p, &path, &root, &marker, &band, &channel, &mut runner) => result,
                 _ = stop.recv() => Ok(()), _ = term.recv() => Ok(()), _ = interrupt.recv() => Ok(()),
                 _ = fail.recv() => Err("Native instance failure signal"),
             };
-            cleanup(p, &path).await?;
+            let stopped = stop_runner(&mut runner).await;
+            let cleaned = cleanup(p, &path).await;
+            stopped?;
+            cleaned?;
             result
         }
     }
@@ -568,6 +626,36 @@ pub(super) async fn run(p: &Platform, args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cancelled_wait_keeps_runner_for_graceful_stop() {
+        let directory =
+            std::env::temp_dir().join(format!("relayforge-runner-{}", random_secret().unwrap()));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let ready = directory.join("ready");
+        let finished = directory.join("finished");
+        let mut runner = Some(Command::new("/bin/sh")
+                .args(["-c", "trap 'printf complete > \"$2\"; exit 0' TERM; touch \"$1\"; while :; do sleep 0.01; done", "runner"])
+                .arg(&ready).arg(&finished).kill_on_drop(true).spawn().unwrap());
+        timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            timeout(Duration::from_millis(10), runner.as_mut().unwrap().wait())
+                .await
+                .is_err()
+        );
+        stop_runner(&mut runner).await.unwrap();
+        assert!(runner.is_none());
+        assert_eq!(fs::read_to_string(finished).unwrap(), "complete");
+        fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn native_options_are_complete_unique_and_literal() {
         let input = [

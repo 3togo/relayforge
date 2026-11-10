@@ -1,5 +1,6 @@
 //! Private create_ap snapshot and child recovery protocol, without a Python runtime.
 mod daemons;
+mod environment;
 mod instance_runtime;
 mod network;
 mod radio_plan;
@@ -26,6 +27,31 @@ use std::{
 };
 use tokio::time::{sleep, Instant};
 const LIMIT: usize = 65536;
+pub(crate) async fn environment_preflight(
+    config: &relayforge_core::config::Config,
+    phy: u32,
+    fixture: Option<&Path>,
+) -> Result<()> {
+    let p = Platform::new(fixture)?;
+    environment::firewall(&p, &config["SHARE_METHOD"]).await?;
+    environment::regulatory(&p, config, phy).await?;
+    Ok(())
+}
+pub(crate) fn driver_preflight(
+    config: &relayforge_core::config::Config,
+    fixture: Option<&Path>,
+) -> Result<String> {
+    let platform = Platform::new(fixture)?;
+    let module = radio_plan::module(&platform, &config["WIFI_IFACE"])?;
+    relayforge_core::ap_policy::driver(&module, config)?;
+    Ok(module)
+}
+pub(crate) async fn existing_bridge_preflight(
+    config: &relayforge_core::config::Config,
+    fixture: Option<&Path>,
+) -> Result<()> {
+    network::bridge::preflight(&Platform::new(fixture)?, config).await
+}
 const FIELDS: &[&str] = &[
     "CONFDIR",
     "COMMON_CONFDIR",
@@ -371,6 +397,58 @@ impl Directory {
 struct Firewall<'a> {
     platform: &'a Platform,
     data: &'a Snapshot,
+    firewalld: bool,
+}
+
+/// When firewalld owns the host firewall, raw iptables mutations are flushed on
+/// the next firewalld reload. Route the same owned rules through firewalld's
+/// direct passthrough so they are tracked by the distribution policy instead of
+/// being clobbered. This never performs a global firewalld rewrite.
+fn firewalld_active() -> bool {
+    for path in [
+        "/usr/bin/firewall-cmd",
+        "/usr/sbin/firewall-cmd",
+        "/bin/firewall-cmd",
+        "/sbin/firewall-cmd",
+    ] {
+        if let Ok(output) = std::process::Command::new(path)
+            .arg("--state")
+            .output()
+        {
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "running"
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Wrap iptables arguments so they are applied through firewalld's direct
+/// passthrough, keeping them under distribution firewall management.
+fn firewalld_passthrough(args: &[String]) -> Vec<String> {
+    let mut command = vec![
+        "--direct".into(),
+        "--passthrough".into(),
+        "ipv4".into(),
+    ];
+    command.extend(args.iter().cloned());
+    command
+}
+
+/// Same as `firewalld_passthrough`, but recorded in firewalld's permanent
+/// configuration so the owned rules survive a daemon reload instead of being
+/// flushed together with the runtime rules.
+fn firewalld_passthrough_permanent(args: &[String]) -> Vec<String> {
+    let mut command = vec![
+        "--permanent".into(),
+        "--direct".into(),
+        "--passthrough".into(),
+        "ipv4".into(),
+    ];
+    command.extend(args.iter().cloned());
+    command
 }
 impl Firewall<'_> {
     fn permit_add(&self) -> Result<()> {
@@ -397,6 +475,7 @@ impl Executor for Firewall<'_> {
         }
         if operation == Some("-I") {
             self.permit_add()?;
+            environment::firewall(self.platform, &self.data.fields["SHARE_METHOD"]).await?;
         }
         if let Some(root) = &self.platform.fixture {
             let dir = Directory::open(root)?;
@@ -426,6 +505,49 @@ impl Executor for Firewall<'_> {
                     .clone(),
             });
         }
+        let environment = BTreeMap::from([
+            ("PATH".into(), "/usr/sbin:/usr/bin:/sbin:/bin".into()),
+            ("LC_ALL".into(), "C".into()),
+        ]);
+        if self.firewalld {
+            let program = [
+                "/usr/bin/firewall-cmd",
+                "/usr/sbin/firewall-cmd",
+                "/bin/firewall-cmd",
+                "/sbin/firewall-cmd",
+            ]
+            .into_iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .ok_or("firewall-cmd unavailable")?;
+            // Persist owned rules across firewalld reloads. The runtime passthrough
+            // is authoritative for the live hotspot; the permanent copy is applied
+            // best-effort so a duplicate or unsupported permanent insert never
+            // breaks the running rule.
+            if matches!(operation, Some("-I") | Some("-D")) {
+                let _ = radio::command_result(
+                    program,
+                    &firewalld_passthrough_permanent(args)
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    Duration::from_secs(4),
+                    Some(&environment),
+                )
+                .await;
+            }
+            return radio::command_result(
+                program,
+                &firewalld_passthrough(args)
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                Duration::from_secs(4),
+                Some(&environment),
+            )
+            .await
+            .map_err(|_| "Firewall command failed or timed out");
+        }
         let program = [
             "/usr/sbin/iptables",
             "/usr/bin/iptables",
@@ -436,10 +558,6 @@ impl Executor for Firewall<'_> {
         .map(Path::new)
         .find(|p| p.is_file())
         .ok_or("iptables unavailable")?;
-        let environment = BTreeMap::from([
-            ("PATH".into(), "/usr/sbin:/usr/bin:/sbin:/bin".into()),
-            ("LC_ALL".into(), "C".into()),
-        ]);
         radio::command_result(
             program,
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -496,7 +614,11 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             if !path.exists() {
                 return Ok(None);
             }
-            let stat = fs::read_to_string(path.join("stat")).map_err(|_| e)?;
+            let stat = match fs::read_to_string(path.join("stat")) {
+                Ok(stat) => stat,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(e),
+            };
             if stat
                 .rsplit_once(')')
                 .is_some_and(|(_, s)| s.split_whitespace().next() == Some("Z"))
@@ -506,33 +628,40 @@ fn observe(pid: u32) -> Result<Option<Observed>> {
             return Err(e);
         }
     };
-    let path = PathBuf::from(format!("/proc/{pid}"));
-    let uid = fs::metadata(&path)
-        .map_err(|_| "Cannot inspect child user")?
-        .uid();
-    let exe = fs::read_link(path.join("exe"))
-        .map_err(|_| "Cannot inspect child executable")?
-        .to_str()
-        .ok_or("Invalid child executable")?
-        .trim_end_matches(" (deleted)")
-        .to_owned();
-    let mut bytes = Vec::new();
-    File::open(path.join("cmdline"))
-        .and_then(|f| f.take(16385).read_to_end(&mut bytes))
-        .map_err(|_| "Cannot inspect child arguments")?;
-    if bytes.len() > 16384 || bytes.is_empty() {
-        return Err("Invalid child arguments");
-    }
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
-    let args = text
-        .trim_end_matches('\0')
-        .split('\0')
-        .map(str::to_owned)
-        .collect();
-    if !birth.live()? {
+    observe_birth(birth)
+}
+fn observe_birth(birth: Birth) -> Result<Option<Observed>> {
+    let pid = birth.pid;
+    let inspected = birth.inspect(|| {
+        let path = PathBuf::from(format!("/proc/{pid}"));
+        let uid = fs::metadata(&path)
+            .map_err(|_| "Cannot inspect child user")?
+            .uid();
+        let exe = fs::read_link(path.join("exe"))
+            .map_err(|_| "Cannot inspect child executable")?
+            .to_str()
+            .ok_or("Invalid child executable")?
+            .trim_end_matches(" (deleted)")
+            .to_owned();
+        let mut bytes = Vec::new();
+        File::open(path.join("cmdline"))
+            .and_then(|f| f.take(16385).read_to_end(&mut bytes))
+            .map_err(|_| "Cannot inspect child arguments")?;
+        if bytes.len() > 16384 || bytes.is_empty() {
+            return Err("Invalid child arguments");
+        }
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let text = String::from_utf8(bytes).map_err(|_| "Invalid child arguments")?;
+        let args = text
+            .trim_end_matches('\0')
+            .split('\0')
+            .map(str::to_owned)
+            .collect();
+        Ok((uid, exe, hash, args))
+    })?;
+    let Some((uid, exe, hash, args)) = inspected else {
         return Ok(None);
-    }
+    };
     Ok(Some(Observed {
         uid,
         identity: Identity {
@@ -840,7 +969,19 @@ async fn stop(identity: &Identity) -> Result<()> {
     Err("Owned child did not exit")
 }
 async fn stop_children(p: &Platform, dir: &Directory) -> Result<()> {
+    let bridge_failure = async {
+        if dir.read("bridge.json", true, LIMIT)?.is_none() {
+            return Ok(());
+        }
+        let (data, _) = snapshot(p, dir)?;
+        network::bridge::begin_stop(p, dir, &data).await
+    }
+    .await
+    .err();
     let mut failure = daemons::stop_all(p, dir).await.err();
+    if failure.is_none() {
+        failure = bridge_failure;
+    }
     dir.entries()?;
     // Quiesce every verified child even if another record prevents full cleanup.
     for (stem, exe) in CHILDREN {
@@ -985,6 +1126,12 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             stop_children(p, &dir).await?;
             Ok(String::new())
         }
+        "bridge-prepare" if values.is_empty() => {
+            let (data, _) = snapshot(p, &dir)?;
+            let config = daemons::frozen(p, &data)?;
+            network::bridge::prepare(p, &dir, &data, &config).await?;
+            Ok(String::new())
+        }
         "check-interfaces" if values.is_empty() => {
             snapshot(p, &dir)?.0.interfaces(p)?;
             Ok(String::new())
@@ -996,6 +1143,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             Firewall {
                 platform: p,
                 data: &data,
+                firewalld: firewalld_active(),
             }
             .permit_add()?;
             let plan = Plan::new(&data.fields)?;
@@ -1006,6 +1154,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                     &mut Firewall {
                         platform: p,
                         data: &data,
+                        firewalld: firewalld_active(),
                     },
                 ),
             )
@@ -1021,6 +1170,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
             let mut driver = Firewall {
                 platform: p,
                 data: &data,
+                firewalld: firewalld_active(),
             };
             tokio::time::timeout(Duration::from_secs(12), async {
                 if action == "firewall-remove" {
@@ -1093,6 +1243,7 @@ async fn action(p: &Platform, action: &str, path: &Path, values: &[String]) -> R
                 .verify(&mut Firewall {
                     platform: p,
                     data: &data,
+                    firewalld: firewalld_active(),
                 })
                 .await?;
             Ok(String::new())
@@ -1140,6 +1291,30 @@ pub(crate) async fn finish_instance_cleanup(marker: &Path, fixture: Option<&Path
 mod tests {
     use super::*;
     #[test]
+    fn observation_accepts_exit_after_birth_capture() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let birth = Birth::capture(child.id()).unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(observe_birth(birth).unwrap().is_none());
+    }
+    #[test]
+    fn observation_preserves_live_process_identity() {
+        let pid = std::process::id();
+        let birth = Birth::capture(pid).unwrap();
+        let observed = observe_birth(birth.clone()).unwrap().unwrap();
+        assert_eq!(observed.identity.pid, pid);
+        assert_eq!(observed.identity.starttime, birth.start);
+        assert_eq!(observed.uid, unsafe { libc::geteuid() });
+        assert_eq!(
+            observed.identity.exe,
+            std::env::current_exe().unwrap().to_str().unwrap()
+        );
+    }
+    #[test]
     fn forwarding_link_addresses_do_not_relax_ap_mac_validation() {
         for address in [String::new(), vec!["ab"; 20].join(":"), vec!["ab"; 32].join(":")] {
             assert!(valid_link_address(&address).is_ok());
@@ -1166,5 +1341,57 @@ mod tests {
         assert!(instance("create_ap.wlp2s0.conf.Ab123456"));
         assert!(!instance("create_ap.-unsafe.conf.Ab123456"));
         assert!(!instance("create_ap.wlp2s0.conf.Ab12345/"));
+    }
+    #[test]
+    fn firewalld_passthrough_wraps_owned_iptables_rules() {
+        let args = vec![
+            "-w".into(),
+            "2".into(),
+            "-t".into(),
+            "nat".into(),
+            "-I".into(),
+            "POSTROUTING".into(),
+        ];
+        let wrapped = firewalld_passthrough(&args);
+        assert_eq!(
+            wrapped,
+            vec![
+                "--direct".to_string(),
+                "--passthrough".to_string(),
+                "ipv4".to_string(),
+                "-w".to_string(),
+                "2".to_string(),
+                "-t".to_string(),
+                "nat".to_string(),
+                "-I".to_string(),
+                "POSTROUTING".to_string(),
+            ]
+        );
+    }
+    #[test]
+    fn firewalld_passthrough_permanent_prepends_permanent_flag() {
+        let args = vec![
+            "-w".into(),
+            "2".into(),
+            "-t".into(),
+            "nat".into(),
+            "-I".into(),
+            "POSTROUTING".into(),
+        ];
+        assert_eq!(
+            firewalld_passthrough_permanent(&args),
+            vec![
+                "--permanent".to_string(),
+                "--direct".to_string(),
+                "--passthrough".to_string(),
+                "ipv4".to_string(),
+                "-w".to_string(),
+                "2".to_string(),
+                "-t".to_string(),
+                "nat".to_string(),
+                "-I".to_string(),
+                "POSTROUTING".to_string(),
+            ]
+        );
     }
 }

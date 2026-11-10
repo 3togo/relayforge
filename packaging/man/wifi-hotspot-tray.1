@@ -1,0 +1,21 @@
+.TH WIFI-HOTSPOT-TRAY 1 "2026-10-29" "RelayForge 0.1.0" "User Commands"
+.SH NAME
+wifi-hotspot-tray \- RelayForge status tray indicator and menu
+.SH SYNOPSIS
+.B wifi-hotspot-tray
+[\fB\-\-show\-icon\fR] [\fB\-\-session\-start\fR]
+.SH DESCRIPTION
+.B wifi-hotspot-tray
+runs the desktop status indicator for the RelayForge Wi\-Fi sharing service.
+It shows the current sharing state, lets you toggle the hotspot, and surfaces
+failure guidance. It is started automatically on login when autostart is enabled.
+.SH OPTIONS
+.TP
+.B \-\-show\-icon
+Show the tray icon in this session.
+.TP
+.B \-\-session\-start
+Refresh tray controls after package installation.
+.SH SEE ALSO
+.BR wifi-hotspot-settings (1),
+.BR relayforge-service (8)

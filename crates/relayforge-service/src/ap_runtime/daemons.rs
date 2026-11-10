@@ -119,21 +119,28 @@ pub(super) fn frozen(p: &Platform, data: &Snapshot) -> Result<Config> {
         return Err("Frozen configuration must contain explicit credentials");
     }
     let config = config::validate(&raw)?;
+    relayforge_core::ap_policy::security(&config)?;
     let directory = Path::new(&data.fields["CONFDIR"])
         .file_name()
         .unwrap()
         .to_string_lossy();
     if !directory.starts_with(&format!("create_ap.{}.conf.", config["WIFI_IFACE"]))
-        || config["SHARE_METHOD"] == "bridge"
-        || config.contains_key("COUNTRY")
         || config["GATEWAY"] != data.fields["GATEWAY"]
         || config["INTERNET_IFACE"] != data.fields["INTERNET_IFACE"]
         || config["NO_VIRT"] != data.fields["NO_VIRT"]
         || config["SHARE_METHOD"] != data.fields["SHARE_METHOD"]
-        || (config["NO_DNS"] == "1" || config["NO_DNSMASQ"] == "1")
+        || (config["SHARE_METHOD"] == "bridge"
+            || config["NO_DNS"] == "1"
+            || config["NO_DNSMASQ"] == "1")
             != (data.fields["NO_DNS"] == "1")
     {
         return Err("Daemon configuration differs from the owned snapshot");
+    }
+    if config["SHARE_METHOD"] == "bridge" {
+        network::bridge::validate_config(&config)?;
+        if data.fields["BRIDGE_IFACE"] != config["INTERNET_IFACE"] {
+            return Err("Frozen bridge differs from the upstream");
+        }
     }
     let _ = p;
     Ok(config)
@@ -168,11 +175,8 @@ fn render(
     if config["IEEE80211N"] == "1" || config["IEEE80211AC"] == "1" {
         host.push_str("wmm_enabled=1\n");
     }
-    let wpa = if config["WPA_VERSION"] == "3" {
-        "2"
-    } else {
-        &config["WPA_VERSION"]
-    };
+    let security = relayforge_core::ap_policy::security(config)?;
+    let wpa = security.wpa;
     host.push_str(&format!(
         "wpa={wpa}\nwpa_{}={}\nwpa_key_mgmt={}\nwpa_pairwise=CCMP\nrsn_pairwise=CCMP\n",
         if config["USE_PSK"] == "1" {
@@ -181,16 +185,24 @@ fn render(
             "passphrase"
         },
         config["PASSPHRASE"],
-        if config["WPA_VERSION"] == "3" {
-            "WPA-PSK SAE"
-        } else {
-            "WPA-PSK"
-        }
+        security.key_management
     ));
-    if config["WPA_VERSION"] == "3" {
-        host.push_str("ieee80211w=1\n");
+    if security.protected_management_frames != 0 {
+        host.push_str(&format!(
+            "ieee80211w={}\n",
+            security.protected_management_frames
+        ));
     }
     let mut files = BTreeMap::from([("hostapd".into(), host)]);
+    if config["SHARE_METHOD"] == "bridge" {
+        files
+            .get_mut("hostapd")
+            .unwrap()
+            .push_str(&format!("bridge={}\n", config["INTERNET_IFACE"]));
+        if manifest.account.is_some() {
+            return Err("Bridge mode must not acquire DHCP resources");
+        }
+    }
     if manifest.account.is_some() {
         let gateway = &config["GATEWAY"];
         let subnet = gateway.rsplit_once('.').ok_or("Invalid gateway")?.0;
@@ -254,7 +266,7 @@ pub(super) async fn configure(p: &Platform, dir: &Directory, values: &[String]) 
     {
         return Err("Stop must finish the prior daemon session");
     }
-    let account = if config["NO_DNSMASQ"] == "0" {
+    let account = if config["SHARE_METHOD"] != "bridge" && config["NO_DNSMASQ"] == "0" {
         Some(leases::account(p)?)
     } else {
         None
@@ -403,6 +415,18 @@ impl Drop for Running {
         for task in &self.output {
             task.abort();
         }
+        // `kill_on_drop` only starts the kill: without a wait the daemon stays a
+        // zombie until this service exits, and every start/stop cycle would leak
+        // another process-table entry. Reap it here. A destructor cannot await,
+        // so this is bounded and best effort; SIGKILL delivery is quick.
+        let _ = self.child.start_kill();
+        for _ in 0..50 {
+            match self.child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                Err(_) => break,
+            }
+        }
     }
 }
 async fn launch(
@@ -525,6 +549,10 @@ pub(super) async fn exec(p: &Platform, dir: &Directory, name: &str) -> Result<()
         return Err("Daemon execution gate identity changed");
     }
     verify_files(dir, &m)?;
+    radio_plan::check(p, dir, false).await?;
+    if data.fields["SHARE_METHOD"] == "bridge" {
+        network::daemon_permit(p, dir).await?;
+    }
     let program = crate::ap_process::trusted_file(Path::new(&m.programs[name]))?;
     if program != m.programs[name] {
         return Err("Daemon installation changed");
@@ -585,6 +613,14 @@ async fn enabled(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<bool>
     }
 }
 pub(super) async fn run(p: &Platform, dir: &Directory) -> Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|_| "Cannot register daemon supervisor termination signal")?;
+    tokio::select! {
+        result = run_inner(p, dir) => result,
+        _ = terminate.recv() => Err("AP daemon supervisor stopped"),
+    }
+}
+async fn run_inner(p: &Platform, dir: &Directory) -> Result<()> {
     let _lock = dir.transaction_lock(c".daemons.lock").await?;
     let (data, _) = snapshot(p, dir)?;
     let (mut m, bytes) = read(p, dir, &data)?.ok_or("Configure AP daemons before launch")?;
@@ -613,11 +649,22 @@ pub(super) async fn run(p: &Platform, dir: &Directory) -> Result<()> {
     children.push(launch(p, dir, &data, &mut m, "hostapd").await?);
     let deadline = Instant::now() + Duration::from_secs(if p.fixture.is_some() { 1 } else { 8 });
     let mut ready = false;
+    let mut policy_check = Instant::now();
     loop {
         if data.owner.current()?.is_none() {
             return Err("AP owner exited");
         }
         data.interfaces(p)?;
+        if Instant::now() >= policy_check {
+            environment::firewall(p, &config["SHARE_METHOD"]).await?;
+            if config.contains_key("COUNTRY") {
+                radio_plan::check(p, dir, false).await?;
+            }
+            policy_check = Instant::now() + Duration::from_secs(1);
+        }
+        if data.fields["SHARE_METHOD"] == "bridge" {
+            network::bridge::ready(p, dir, &data).await?;
+        }
         for child in &mut children {
             if child
                 .child

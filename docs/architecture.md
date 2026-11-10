@@ -122,9 +122,11 @@ journals, recovery and automatic resume policy.
 The milestone tests establish protocol/client and simulated lifecycle behavior.
 They do not transfer Wi-Fi Relay's release certification to RelayForge. The
 [physical radio report](physical-radio-validation.md) covers read-only adapter
-inspection. No native hotspot, real Polkit authentication agent, GNOME Shell
-load, firewall mutation or native AP interface creation has been physically
-validated. The laptop's existing Wi-Fi remains untouched by native activation.
+inspection. [Task 18](native-system-integration-validation.md) separately
+qualifies real systemd/D-Bus/Polkit and Shell 51 desktop loading in an isolated
+VM, including noninteractive tray control and explicitly unlocked credentials.
+No native hotspot, interactive Polkit authentication, firewall mutation or
+native AP interface creation has been physically validated. The laptop's existing Wi-Fi remains untouched by native activation.
 
 ## Reference documentation
 

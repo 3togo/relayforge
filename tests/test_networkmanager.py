@@ -71,6 +71,19 @@ def bench(**options):
 
 
 class NativeNetworkManagerTests(unittest.TestCase):
+    def test_capabilities_explain_native_option_restrictions_without_activation(self):
+        with bench() as (context, _), context.service() as (bus, _):
+            capabilities = decode_reply('GetCapabilities', call(bus, 'GetCapabilities'))
+            self.assertTrue(capabilities['startup_preflight']['success'])
+            self.assertEqual(capabilities['startup_preflight']['scope'], 'configuration-and-radio')
+            self.assertTrue(decode_reply('SetConfig', call(bus, 'SetConfig',
+                GLib.Variant('(s)', ('{"NO_DNS":"1"}',)))))
+            capabilities = decode_reply('GetCapabilities', call(bus, 'GetCapabilities'))
+            self.assertFalse(capabilities['startup_preflight']['success'])
+            self.assertIn('overrides', capabilities['startup_preflight']['error'])
+            self.assertEqual(context.events('activation-request'), [])
+            self.assertEqual(context.events('interface-created'), [])
+
     def test_external_interface_and_native_interface_paths_activate_and_stop(self):
         for native in (False,True):
             with self.subTest(native=native),bench(native=native,client=True) as (context,_):

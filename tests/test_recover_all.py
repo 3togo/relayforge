@@ -5,8 +5,9 @@ stop, including a crash, so a killed daemon never strands an owned profile,
 interface or helper process. These tests drive the native recovery entry
 against the private simulators: no networking and no system bus.
 """
+import os
+import select
 import subprocess
-from pathlib import Path
 import unittest
 
 from test_create_ap import bench as ap_bench
@@ -25,15 +26,24 @@ class CreateApTeardownTests(unittest.TestCase):
             with context.service() as (bus, process):
                 self.assertTrue(decode_reply('Start', call(bus, 'Start'))['success'])
                 pid = context.record()['process']['pid']
-                process.kill()
-                process.wait(5)
-            self.assertTrue((context.state / 'create-ap.json').exists())
-            self.assertTrue(Path(f'/proc/{pid}').exists())
-            result = recover('--test-create-ap', context.radio, context.config,
-                             context.state, ROOT / 'tests/fake_create_ap.sh')
-            self.assertEqual(result.returncode, 0, result.stderr)
-            context.clean(self)
-            self.assertFalse(Path(f'/proc/{pid}').exists())
+                helper = os.pidfd_open(pid)
+                try:
+                    exited = select.poll()
+                    exited.register(helper, select.POLLIN)
+                    process.kill()
+                    process.wait(5)
+                    self.assertTrue((context.state / 'create-ap.json').exists())
+                    self.assertEqual(exited.poll(0), [], 'Helper exited before recovery')
+                    result = recover('--test-create-ap', context.radio, context.config,
+                                     context.state, ROOT / 'tests/fake_create_ap.sh')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    context.clean(self)
+                    # A pidfd proves this exact helper exited even if container
+                    # PID 1 has not reaped its zombie, or its PID is later reused.
+                    self.assertTrue(any(events & select.POLLIN for _, events in exited.poll(5000)),
+                                    'Recovered helper is still running')
+                finally:
+                    os.close(helper)
 
     def test_recovery_is_idempotent_and_needs_no_configuration(self):
         with ap_bench() as context:

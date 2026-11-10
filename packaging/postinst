@@ -1,0 +1,35 @@
+#!/bin/sh
+# Reload systemd, preserve administrator enablement choices, and restart only
+# an already running service on upgrade. Load the MAC profile in complain mode
+# until enforcement is validated.
+set -e
+
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] \
+    || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper unmask relayforge-native.service >/dev/null 2>&1 || true
+        deb-systemd-helper unmask relayforge-create-ap.service >/dev/null 2>&1 || true
+        # D-Bus activation makes the selected backend available without enabling
+        # it at boot. Never undo an administrator's explicit disable.
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
+        # On upgrade, pick up a new binary only when the service was already running.
+        for unit in relayforge-native.service relayforge-create-ap.service; do
+            if [ -n "$2" ] && systemctl is-active --quiet "$unit"; then
+                if command -v deb-systemd-invoke >/dev/null 2>&1; then
+                    deb-systemd-invoke restart "$unit" >/dev/null 2>&1 || true
+                else
+                    systemctl restart "$unit" >/dev/null 2>&1 || true
+                fi
+            fi
+        done
+    fi
+
+    # MAC: ship in complain mode so a too-strict profile cannot break the service
+    # before enforcement is validated against live hardware.
+    if command -v aa-complain >/dev/null 2>&1; then
+        aa-complain /usr/lib/relayforge/relayforge-service >/dev/null 2>&1 || true
+    fi
+fi

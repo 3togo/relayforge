@@ -67,6 +67,17 @@ def running(b,expect_ready=True):
 
 
 class DaemonTests(unittest.TestCase):
+    def test_new_startup_policy_cannot_block_cleanup_of_owned_existing_daemons(self):
+        with bench() as b:
+            _,before=prepare(b)
+            with running(b):
+                frozen=Path(b.fields['DAEMON_PIDFILE']).with_suffix('.conf')
+                private(frozen,frozen.read_text()+'WPA_VERSION=3\nUSE_PSK=1\nPASSPHRASE='+'d'*64+'\n')
+                private(b.root/'radio-module','8192cu')
+            self.assertTrue(manifest(b)['cleaned'])
+            finish(b)
+            self.assertEqual(read(b)['interfaces'],before['interfaces'])
+
     def test_configuration_is_private_literal_and_owned_interface_only(self):
         with bench() as b:
             config,before=prepare(b)

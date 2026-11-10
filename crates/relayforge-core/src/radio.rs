@@ -396,6 +396,38 @@ impl Snapshot {
         })
     }
 
+    /// Native configuration/radio policy only; it does not prove daemon or
+    /// network readiness. Compatibility mode retains its separate switch policy.
+    pub fn native_preflight(&self, config: &Config) -> Result<StartPlan, &'static str> {
+        self.native_preflight_with_bridge(config, false)
+    }
+
+    pub fn native_preflight_with_bridge(
+        &self,
+        config: &Config,
+        allow_bridge: bool,
+    ) -> Result<StartPlan, &'static str> {
+        let config = config::validate(config)?;
+        let plan = self.preflight(&config)?;
+        if config["BACKEND"] == "create_ap" {
+            crate::ap_policy::security(&config)?;
+            if config["SHARE_METHOD"] == "bridge" {
+                if !allow_bridge {
+                    return Err("Native create_ap declines bridge mode because it reconfigures the upstream interface");
+                }
+                if config["NO_VIRT"] != "0" || config["WIFI_IFACE"] == config["INTERNET_IFACE"] {
+                    return Err("Existing-bridge sharing requires a separate administrator bridge and an owned virtual AP");
+                }
+            }
+            if plan.switch_upstream {
+                return Err(
+                    "Native create_ap preserves the upstream; reconnect explicitly before Start",
+                );
+            }
+        }
+        Ok(plan)
+    }
+
     pub fn preflight(&self, config: &Config) -> Result<StartPlan, &'static str> {
         let config = config::validate(config)?;
         let caps = &self.capabilities;
@@ -614,6 +646,30 @@ mod tests {
         config.insert("CHANNEL".into(), "default".into());
         config.insert("INTERNET_IFACE".into(), "demo0".into());
         assert!(snapshot.preflight(&config).is_err());
+    }
+
+    #[test]
+    fn native_policy_explains_unsupported_options_without_changing_compatibility_plans() {
+        let snapshot = Snapshot::parse(&Capture::demo("demo0")).unwrap();
+        let mut config = config::merge(
+            &config::defaults(),
+            &Config::from([
+                ("WIFI_IFACE".into(), "demo0".into()),
+                ("INTERNET_IFACE".into(), "eth0".into()),
+            ]),
+        )
+        .unwrap();
+        assert!(snapshot.native_preflight(&config).is_ok());
+        config.insert("SHARE_METHOD".into(), "bridge".into());
+        assert!(snapshot.preflight(&config).is_ok());
+        assert!(snapshot
+            .native_preflight(&config)
+            .unwrap_err()
+            .contains("bridge mode"));
+        config.insert("SHARE_METHOD".into(), "nat".into());
+        config.insert("COUNTRY".into(), "CN".into());
+        // COUNTRY is a read-only requirement, verified by the service/runtime.
+        assert!(snapshot.native_preflight(&config).is_ok());
     }
     #[test]
     fn nm_requires_current_permitted_channel_and_supported_options() {

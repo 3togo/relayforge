@@ -14,9 +14,9 @@ the native modes.
 - Subscribes to `org.freedesktop.DBus.Properties.PropertiesChanged` on
   `/org.freedesktop/NetworkManager` for the `org.freedesktop.NetworkManager`
   interface.
-- Resolves NetworkManager's bus-assigned unique owner first, so the match rule
-  never depends on well-known-name resolution, and keeps resolving it so a later
-  NetworkManager start is picked up.
+- Subscribes through NetworkManager's well-known bus name. The D-Bus library
+  tracks ownership changes and accepts signals only from the current owner,
+  including after NetworkManager restarts.
 - Acts only on `WirelessEnabled == false`, and only when the signal comes from
   NetworkManager. A signal emitted by any other client is ignored.
 - Suppresses the stop while the logind watcher owns a sleep transition, so
@@ -32,6 +32,7 @@ there.
 
 - A radio signal is not authorisation. The resulting `Stop` follows the same
   ownership and cleanup rules as any other stop.
-- If NetworkManager is absent the watcher simply retries; nothing fails.
+- If NetworkManager is absent the subscription waits for its owner to appear;
+  subscription failures are retried.
 - Simulated coverage lives in `tests/test_radio_watch.py`. No physical radio,
   kill switch or adapter was exercised.

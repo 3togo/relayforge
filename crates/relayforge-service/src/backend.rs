@@ -17,14 +17,71 @@ use tokio::{
 };
 
 type Reply = Result<Value, String>;
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Reply>>>>;
+#[derive(Default)]
+struct Pending {
+    requests: HashMap<u64, oneshot::Sender<Reply>>,
+    disconnected: bool,
+}
+type SharedPending = Arc<Mutex<Pending>>;
 pub type Event = (Value, oneshot::Sender<()>);
+
+/// Registration belongs to the call future, including when its caller cancels it.
+struct Request {
+    pending: SharedPending,
+    id: u64,
+}
+impl Request {
+    fn register(
+        pending: &SharedPending,
+        id: u64,
+        sender: oneshot::Sender<Reply>,
+    ) -> Result<Self, String> {
+        let mut state = pending.lock().unwrap();
+        if state.disconnected {
+            return Err("Networking worker disconnected".into());
+        }
+        if state.requests.len() >= 32 {
+            return Err("Too many pending operations".into());
+        }
+        state.requests.insert(id, sender);
+        Ok(Self {
+            pending: pending.clone(),
+            id,
+        })
+    }
+}
+impl Drop for Request {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().requests.remove(&self.id);
+    }
+}
+
+/// A cancelled or failed write must close stdin: a partial frame cannot be reused.
+struct Frame<'a> {
+    input: tokio::sync::MutexGuard<'a, Option<ChildStdin>>,
+    complete: bool,
+}
+impl Drop for Frame<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.input.take();
+        }
+    }
+}
 
 pub struct Worker {
     input: tokio::sync::Mutex<Option<ChildStdin>>,
     child: tokio::sync::Mutex<Child>,
-    pending: Pending,
+    pending: SharedPending,
     next: AtomicU64,
+    reader: tokio::task::AbortHandle,
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // The reader can be blocked waiting for an event acknowledgement even
+        // after the child exits. Do not detach it or retain its pipes/state.
+        self.reader.abort();
+    }
 }
 
 pub async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Option<Value>, String> {
@@ -76,17 +133,13 @@ impl Worker {
         if ready != Some(json!({"ready":1})) {
             return Err("Invalid worker handshake".into());
         }
-        let worker = Arc::new(Self {
-            input: tokio::sync::Mutex::new(Some(child.stdin.take().ok_or("Missing worker input")?)),
-            child: tokio::sync::Mutex::new(child),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            next: AtomicU64::new(1),
-        });
-        let pending = worker.pending.clone();
-        tokio::spawn(async move {
+        let input = child.stdin.take().ok_or("Missing worker input")?;
+        let pending = Arc::new(Mutex::new(Pending::default()));
+        let replies = pending.clone();
+        let reader = tokio::spawn(async move {
             while let Ok(Some(value)) = read_frame(&mut output).await {
                 if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let sender = pending.lock().unwrap().remove(&id);
+                    let sender = replies.lock().unwrap().requests.remove(&id);
                     if let Some(sender) = sender {
                         let result = if value.get("error").is_some() {
                             // Errors are deliberately generic; never echo a malformed secret-bearing frame.
@@ -106,13 +159,23 @@ impl Worker {
                     }
                 }
             }
-            for (_, sender) in pending.lock().unwrap().drain() {
-                let _ = sender.send(Err("Networking worker disconnected".into()));
+            {
+                let mut state = replies.lock().unwrap();
+                state.disconnected = true;
+                for (_, sender) in state.requests.drain() {
+                    let _ = sender.send(Err("Networking worker disconnected".into()));
+                }
             }
             let (ack, _) = oneshot::channel();
             let _ = events.send((json!({"lost":true}), ack)).await;
         });
-        Ok(worker)
+        Ok(Arc::new(Self {
+            input: tokio::sync::Mutex::new(Some(input)),
+            child: tokio::sync::Mutex::new(child),
+            pending,
+            next: AtomicU64::new(1),
+            reader: reader.abort_handle(),
+        }))
     }
 
     pub async fn call(&self, method: Method, params: Value) -> Reply {
@@ -124,31 +187,30 @@ impl Worker {
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
-        {
-            let mut pending = self.pending.lock().unwrap();
-            if pending.len() >= 32 {
-                return Err("Too many pending operations".into());
-            }
-            pending.insert(id, sender);
-        }
+        let _request = Request::register(&self.pending, id, sender)?;
         let mut bytes =
             serde_json::to_vec(&json!({"id":id,"method":method.name(),"params":params})).unwrap();
         bytes.push(b'\n');
         let result = async {
-            self.input
-                .lock()
-                .await
-                .as_mut()
-                .ok_or("Worker input closed".to_owned())?
-                .write_all(&bytes)
-                .await
-                .map_err(|_| "Worker input closed".to_owned())?;
+            {
+                let mut frame = Frame {
+                    input: self.input.lock().await,
+                    complete: false,
+                };
+                frame
+                    .input
+                    .as_mut()
+                    .ok_or("Worker input closed".to_owned())?
+                    .write_all(&bytes)
+                    .await
+                    .map_err(|_| "Worker input closed".to_owned())?;
+                frame.complete = true;
+            }
             receiver.await.map_err(|_| "Worker reply lost".to_owned())?
         };
         let result = timeout(Duration::from_secs(90), result)
             .await
             .unwrap_or_else(|_| Err("Worker operation timed out; cleanup unconfirmed".into()));
-        self.pending.lock().unwrap().remove(&id);
         result
     }
 
@@ -269,7 +331,151 @@ Path(__file__).with_suffix('.closed').write_text('EOF')
         .is_err());
         let (event, _) = events.recv().await.unwrap();
         assert_eq!(event["lost"], true);
+        assert_eq!(
+            timeout(
+                Duration::from_secs(1),
+                worker.call(Method::Stop, Value::Null)
+            )
+            .await
+            .unwrap()
+            .unwrap_err(),
+            "Networking worker disconnected"
+        );
         worker.close_and_wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_calls_release_capacity_and_ignore_late_replies() {
+        let root = Fixture::new(true);
+        let (sender, mut events) = mpsc::channel(8);
+        let worker = Worker::spawn(&root.0, sender).await.unwrap();
+        for _ in 0..40 {
+            let caller = worker.clone();
+            let task =
+                tokio::spawn(async move { caller.call(Method::GetStatus, Value::Null).await });
+            let (_, ack) = timeout(Duration::from_secs(3), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(worker.pending.lock().unwrap().requests.is_empty());
+            ack.send(()).unwrap();
+        }
+        timeout(Duration::from_secs(3), worker.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_waiting_for_the_writer_does_not_close_healthy_input() {
+        let root = Fixture::new(true);
+        let (sender, _) = mpsc::channel(8);
+        let worker = Worker::spawn(&root.0, sender).await.unwrap();
+        let input = worker.input.lock().await;
+        let caller = worker.clone();
+        let task = tokio::spawn(async move { caller.call(Method::Stop, Value::Null).await });
+        timeout(Duration::from_secs(3), async {
+            while worker.pending.lock().unwrap().requests.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(worker.pending.lock().unwrap().requests.is_empty());
+        assert!(input.is_some());
+        drop(input);
+        timeout(Duration::from_secs(3), worker.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_write_closes_stdin_and_allows_eof_cleanup() {
+        use std::os::fd::AsRawFd;
+        let root = Fixture::new(true);
+        std::fs::write(
+            root.0.join("compat/worker.py"),
+            r#"
+import sys,time
+from pathlib import Path
+root=Path(__file__).parent
+print('{"ready":1}',flush=True)
+while not (root/'read').exists():
+    time.sleep(0.01)
+data=sys.stdin.buffer.read()
+(root/'received').write_bytes(data)
+"#,
+        )
+        .unwrap();
+        let (sender, _) = mpsc::channel(8);
+        let worker = Worker::spawn(&root.0, sender).await.unwrap();
+        {
+            let input = worker.input.lock().await;
+            // Ensure the frame cannot fit while the fixture deliberately does not read.
+            assert!(
+                unsafe {
+                    libc::fcntl(
+                        input.as_ref().unwrap().as_raw_fd(),
+                        libc::F_SETPIPE_SZ,
+                        4096,
+                    )
+                } > 0
+            );
+        }
+        assert!(timeout(
+            Duration::from_millis(100),
+            worker.call(Method::Start, json!("x".repeat(32768)))
+        )
+        .await
+        .is_err());
+        assert!(worker.pending.lock().unwrap().requests.is_empty());
+        assert!(worker.input.lock().await.is_none());
+        assert!(timeout(
+            Duration::from_secs(1),
+            worker.call(Method::Stop, Value::Null)
+        )
+        .await
+        .unwrap()
+        .is_err());
+        std::fs::write(root.0.join("compat/read"), "").unwrap();
+        timeout(Duration::from_secs(3), worker.close_and_wait())
+            .await
+            .unwrap()
+            .unwrap();
+        let received = std::fs::read(root.0.join("compat/received")).unwrap();
+        assert!(!received.is_empty());
+        assert!(!received.ends_with(b"\n"));
+        assert!(received.len() < 32768);
+    }
+
+    #[tokio::test]
+    async fn dropping_worker_releases_reader_waiting_for_event_acknowledgement() {
+        let root = Fixture::new(true);
+        let (sender, mut events) = mpsc::channel(8);
+        let worker = Worker::spawn(&root.0, sender).await.unwrap();
+        let pending = Arc::downgrade(&worker.pending);
+        let caller = worker.clone();
+        let task = tokio::spawn(async move { caller.call(Method::GetStatus, Value::Null).await });
+        let (_, ack) = timeout(Duration::from_secs(3), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        drop(worker);
+        timeout(Duration::from_secs(3), async {
+            while pending.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(ack.send(()).is_err());
     }
 
     #[tokio::test]

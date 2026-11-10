@@ -1,0 +1,173 @@
+{
+  "date_utc": "2026-11-06",
+  "package_source": {
+    "revision": "669175f20f3db67fc7c2fcea415d14760be7bded",
+    "tree": "322bdb54cfeec4d3f05be1994f76f9b2d8c2da77",
+    "committed_source_files_and_modes_verified": 283,
+    "hooks_sha256": {
+      "postinst": "beaba063af318b3bba3805175b497ffad05895c158c12666ad69f8e6967c7b4d",
+      "prerm": "faaa6cb5b9dc3866b2ae790734d3b726693fb71ae84808a9dc98fe91f473d02b",
+      "postrm": "2906edfa0e54c43efedb79aef8694f40b8b32d766d228dbc2a4d1cd8b90fa406"
+    }
+  },
+  "service_binary": {
+    "source_matches_revision": "669175f20f3db67fc7c2fcea415d14760be7bded",
+    "sha256": "645fc30f10a2512d8d2d28534ea555f0c69f271b194fceec45e6c8ecf38b64fa",
+    "packaged_sha256": "c50b2f22cfe7e7a2eda577dbfcbde584cc09b547f0b14e1fe3d4b1afdbe8317a",
+    "build_receipt_sha256": "4e00ec11029de7dbd42ca20aa551f6ea38cd5a93c4fd37fe3e4fa5fb57af4c6e",
+    "reused_exact_source_build": true
+  },
+  "environment": {
+    "host_distribution": "Ubuntu 26.10 (Stonking Stingray)",
+    "architecture": "x86_64",
+    "guest_distribution": "Ubuntu 26.10 (Stonking Stingray)",
+    "guest_packages": [
+      "dbus 1.16.2-5ubuntu2",
+      "gnome-shell 51.0-2ubuntu3",
+      "libgtk-3-0t64 3.24.52-0ubuntu1",
+      "libgtk-4-1 4.24.1+ds-1",
+      "polkitd 127-3ubuntu1",
+      "python3 3.14.7-3",
+      "systemd 261.3-0ubuntu3"
+    ],
+    "physical_client": "Android"
+  },
+  "installed_system": {
+    "exit_code": 0,
+    "source_unchanged": true,
+    "host_network_unchanged": true,
+    "complete": true,
+    "checks": [
+      "apt-create_ap-1",
+      "enablement-preserved-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "apt-create_ap-2",
+      "enablement-preserved-create_ap-2",
+      "no-install-activation-create_ap-2",
+      "activation-create_ap-2",
+      "systemd-create_ap-2",
+      "root-polkit-create_ap-2",
+      "unprivileged-credential-denial-create_ap-2",
+      "apt-create_ap-1",
+      "enablement-preserved-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "remove-running-create_ap",
+      "reinstall-create_ap",
+      "apt-networkmanager-2",
+      "enablement-preserved-networkmanager-2",
+      "no-install-activation-networkmanager-2",
+      "activation-networkmanager-2",
+      "systemd-networkmanager-2",
+      "root-polkit-networkmanager-2",
+      "unprivileged-credential-denial-networkmanager-2",
+      "active-local-password-free-control-policy",
+      "desktop",
+      "desktop-does-not-request-protected-config",
+      "companion-remove",
+      "companion-reinstall",
+      "remove",
+      "remove-running-networkmanager",
+      "purge",
+      "explicit-config-preserved"
+    ],
+    "guest_packages_match": true,
+    "owned_qemu_stopped": true,
+    "owned_container_stopped": true,
+    "check_count": 39,
+    "hook_regression_tests_passed": 3,
+    "signed_image_checksums_verified": true
+  },
+  "packages_sha256": {
+    "create_ap-2/relayforge-tray_0.1.2~r669175f2_all.deb": "0c16052ec47ca53f3503ce14206a0663496838708114ee621300a79ad5405d43",
+    "create_ap-2/relayforge_0.1.2~r669175f2_amd64.deb": "72313847ce56cad7dc86bb612d617eff09395898ab1c7a4a5787ee4e01c28c99",
+    "create_ap-2/relayforge-gnome_0.1.2~r669175f2_all.deb": "d221684ddcfe4790dd3448083fcc11d2132ec03ec4a00f279c9229ed1399ed94",
+    "create_ap-1/relayforge-tray_0.1.2~r669175f1_all.deb": "abc26974b46e3241f4811524c08d00c7df25bbff4acf9ad043464fb7b890593f",
+    "create_ap-1/relayforge-gnome_0.1.2~r669175f1_all.deb": "b177f22ceba336b2b8810342e4787476d630cd1dd94fbefd37a52cc3c5fc1c0c",
+    "create_ap-1/relayforge_0.1.2~r669175f1_amd64.deb": "bc42e5b8d9aa613b3bd8882f73ee75b51360f0be06a217ab59563c9bfb7137b7",
+    "networkmanager-2/relayforge-tray_0.1.2~r669175f2_all.deb": "92f3a31462015a07f5267ecfa7ab21169247fd2ad0c55cce34687758dc382a0c",
+    "networkmanager-2/relayforge_0.1.2~r669175f2_amd64.deb": "3630d0d35b4e67d43b440537bbda7eb67e3976e6c7406fd4d4be0554d36c7bef",
+    "networkmanager-2/relayforge-gnome_0.1.2~r669175f2_all.deb": "9f7e38940f2401030a33940098a5e538c732a7a38632fc941e51e978cd0a52d6"
+  },
+  "harness_sha256": {
+    "run.py": "e21bad985d62c780f953fac10113403f85096b8b143eb38f3734df7cdb007296",
+    "guest.py": "115582298ffd85f779330932998bae36b57e5d812e459a2ab59b3eba47200747",
+    "desktop.sh": "19e084e2e9096c44fe4518198ffdce4fc0f786d7b4bc214f276d9256bc4011bf",
+    "probe.js": "d4c28459b94075f8c973aeeed7439489b504dccb4591aaae76d0af5a7869a779"
+  },
+  "image_chain_sha256": [
+    "b8773558686b62ce3f0129e6f4b489e36d718178ad474f5084f1c1015ca5614d",
+    "6c28ee308c1d8e62f37fced6badf97f89e3751481a014de4e9628412a1d83964",
+    "91e9f267f966bb727dd1b71b7cfeb5ad672d03db39a234a5c6aba1b57ce4cfe9",
+    "da10517cb368c4a9cf3f80ffd4628005a7ea1d95893123016e2c194f3ce8a5d8",
+    "640e206ee05890b4f7333aba32bb05b9d8bacffc33ffdcff20388f09b679245a",
+    "a021682aff9c0d455315230f229138e4d1413c5bce96ec336e453a69086d9c2f"
+  ],
+  "physical": {
+    "complete": true,
+    "all_checks_passed": true,
+    "backend": "create_ap",
+    "mode": "dedicated 2.4 GHz AP with Ethernet upstream",
+    "checks": [
+      "physical-ap-start",
+      "rtc-wake-armed",
+      "real-suspend-and-rtc-resume",
+      "dedicated-adapter-cleanup-after-resume",
+      "manual-ap-restart-after-resume",
+      "physical-ap-stop"
+    ],
+    "actual_suspended_seconds": 44.921,
+    "upstream_recovery_wait_seconds": 38.1,
+    "ap_restart_after_resume": "manual",
+    "client_before_suspend": {
+      "complete": true,
+      "dhcp_lease_confirmed_by_service": true,
+      "gateway_ping": "passed",
+      "explicit_gateway_dns": "passed",
+      "certificate_verified_https": {
+        "status": 200,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_128_GCM_SHA256"
+      }
+    },
+    "client_after_suspend": {
+      "complete": true,
+      "dhcp_lease_confirmed_by_service": true,
+      "gateway_ping": "passed",
+      "explicit_gateway_dns": "passed",
+      "certificate_verified_https": {
+        "status": 200,
+        "protocol": "TLSv1.3",
+        "cipher": "TLS_AES_128_GCM_SHA256"
+      }
+    }
+  },
+  "restoration": {
+    "client_back_on_original_network": true,
+    "original_saved_networks_preserved": true,
+    "host_radio_and_connection_set_restored": true,
+    "temporary_control_policy_removed": true,
+    "cleanup_errors": [],
+    "both_devices_restored": true,
+    "host_semantically_restored": true,
+    "source_contents_unchanged": true,
+    "no_test_ap_links": true,
+    "no_test_containers": true,
+    "rtc_alarm_cleared": true
+  },
+  "private_evidence_sha256": "7b08f18d45a9a187caece1dc722c423406228a777575d9ba361216f9aadbdf39",
+  "private_evidence_files_verified": 128,
+  "limits": [
+    "The release binary was reused from a prior build with source contents and modes matching the tested commit; package assembly and both qualification runs were new.",
+    "Installed-system checks cover idle-service package lifecycle, not active-sharing upgrades.",
+    "Physical coverage uses one adapter/client, create_ap, dedicated 2.4 GHz AP mode, Ethernet upstream and manual AP restart after resume.",
+    "Other bands, AP+STA operation, automatic restart, other hardware/distributions and interactive Polkit-agent prompts remain unqualified."
+  ]
+}

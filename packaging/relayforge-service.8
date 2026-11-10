@@ -1,0 +1,64 @@
+.TH RELAYFORGE-SERVICE 8 "" "RelayForge" "System Administration"
+.SH NAME
+relayforge-service \- native RelayForge Wi-Fi sharing service
+.SH SYNOPSIS
+.B /usr/lib/relayforge/relayforge-service --native-networkmanager
+.br
+.B /usr/lib/relayforge/relayforge-service --native-create-ap --legacy-root ROOT
+.br
+.B /usr/lib/relayforge/relayforge-service --init-config PATH
+.RB [ --wifi-interface NAME ]
+.RB [ --ssid NAME ]
+.RB [ --backend networkmanager|create_ap ]
+.br
+.B /usr/lib/relayforge/relayforge-service --migrate-config PATH
+.RB [ --dry-run ]
+.RB [ --detect-interface | --wifi-interface NAME ]
+.SH DESCRIPTION
+Normally started by the selected packaged systemd unit. The service exposes the
+existing Wi-Fi Hotspot D-Bus interface with Polkit authorization. Installing a
+package does not initialize credentials, start the service or activate sharing.
+.SH INITIALIZATION
+Use an absolute protected path and a real Wi-Fi interface. Initialization creates
+fresh random credentials and refuses to overwrite an existing configuration.
+Select the backend explicitly. Refer to the packaged README for the service unit
+and setup sequence appropriate to the package.
+.SH MIGRATION
+Migration operates on an administrator-owned mode-0600 offline copy. Writes to
+the live /etc/wifi-hotspot.conf are refused. Dry-run reports planned changes
+without writing. Only the exact retained factory template receives a new random
+password; customized credentials and settings are preserved. Interface repair
+requires explicit opt-in and observed adapter evidence. Migration does not
+activate sharing or modify the network.
+.SH EXPERIMENTAL BAND SWITCHING
+Appending --allow-band-switch to a native service command enables the explicit,
+authorized SwitchBandAndReconnect request while sharing is stopped. Packaged
+units omit this flag. Ordinary Start always preserves the existing upstream.
+The controller targets a fresh same-network scanned AP using the existing
+profile, without editing settings or requesting secrets. Profiles pinned to a
+band, BSSID or channel are refused. Stop/sleep request guarded restoration;
+ambiguous activation or external changes retain a private recovery journal and
+block further startup. Inspect the upstream before resolving retained evidence.
+Only private-bus simulation has been validated; use requires a controlled session.
+See /usr/share/doc/relayforge/docs/native-feature-policy.md for ownership and
+recovery limits.
+.SH EXPERIMENTAL EXISTING BRIDGE
+Appending --allow-existing-bridge to a native create_ap service command permits
+SHARE_METHOD=bridge only when INTERNET_IFACE is an existing active Linux bridge
+and NO_VIRT=0. Packaged units omit this flag. The service adds only a newly owned
+virtual AP child. It does not create/delete the bridge, move upstream addresses
+or routes, alter bridge policy, or acquire DHCP, DNS, NAT or forwarding resources.
+Ownership journals bind the boot/namespace, bridge, parent radio and child.
+Changed identities, foreign membership or ambiguous cleanup retain evidence.
+The bridge must already have an administrator-assigned MAC; automatic bridge MAC
+selection is refused rather than reconfigured. Hardware traffic and
+driver validation require a dedicated bench; only simulated interfaces have been
+tested. Existing bridge integration is experimental.
+.SH LIMITS
+Automatic upstream band switching and new bridge/upstream migration are unavailable. Radio and
+configuration blockers are exposed through GetCapabilities and desktop failure
+messages. Offline test results do not certify drivers or live network behavior.
+.SH FILES
+.I /etc/wifi-hotspot.conf
+.SH SEE ALSO
+.BR wifi-hotspot-settings (1)

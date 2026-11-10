@@ -1,7 +1,7 @@
 //! logind sleep coordination. Intent is memory-only and never authorizes a new upstream.
 use crate::{
     networkmanager::{self, Upstream},
-    Service,
+    service::Service,
 };
 use futures_util::StreamExt;
 use relayforge_core::{config::Config, Lifecycle, Method, Status, OBJECT_PATH};
@@ -177,6 +177,8 @@ impl Service {
             };
             let previous = self.core.lock().unwrap().status.clone();
             let clean = native.stop().await;
+            let band_clean = self.band_switch.as_ref().unwrap().recover().await.is_ok();
+            let clean = clean && band_clean;
             self.core
                 .lock()
                 .unwrap()

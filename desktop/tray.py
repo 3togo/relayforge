@@ -150,6 +150,8 @@ class HotspotTray(Gtk.Application):
         Gtk.Application.do_shutdown(self)
 
     def _restart_after_upgrade(self):
+        if self.closed:
+            return GLib.SOURCE_REMOVE
         arguments = list(sys.argv)
         if self.manual_start and '--show-icon' not in arguments:
             arguments.append('--show-icon')
@@ -372,6 +374,8 @@ class HotspotTray(Gtk.Application):
             self._error(str(error))
 
     def _operation_error(self, message):
+        if 'AccessDenied' in message:
+            message += '\nUse an active local desktop session or ask an administrator to review the RelayForge policy. The tray never requests an administrator password.'
         self.request_error = message
         self._error(message)
 

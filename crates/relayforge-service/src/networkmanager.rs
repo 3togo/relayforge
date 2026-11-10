@@ -105,7 +105,7 @@ fn interface_subnets(text: &str) -> Result<Vec<Subnet>> {
     }
     Ok(result)
 }
-fn field<'a>(settings: &'a Settings, section: &str, key: &str) -> Option<&'a str> {
+pub(crate) fn field<'a>(settings: &'a Settings, section: &str, key: &str) -> Option<&'a str> {
     settings
         .get(section)?
         .get(key)
@@ -205,8 +205,8 @@ fn matches(settings: &Settings, owned: &Owned) -> bool {
         && tags.as_ref().and_then(|t| t.get(MARKER)) == Some(&owned.token)
 }
 pub(crate) struct Bus {
-    connection: Connection,
-    owner: String,
+    pub(crate) connection: Connection,
+    pub(crate) owner: String,
 }
 impl Bus {
     pub(crate) async fn open(fixture: bool) -> Result<Self> {
@@ -275,10 +275,10 @@ impl Bus {
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-struct Identity {
-    ifindex: u32,
-    mac: String,
-    phy: u32,
+pub(crate) struct Identity {
+    pub(crate) ifindex: u32,
+    pub(crate) mac: String,
+    pub(crate) phy: u32,
 }
 #[derive(Deserialize)]
 struct Interface {
@@ -321,7 +321,7 @@ impl Platform {
             .ok_or("iw is unavailable")?;
         radio::command(program, args, Duration::from_secs(3)).await
     }
-    async fn identity(&self, bus: &Bus, iface: &str) -> Result<Option<Identity>> {
+    pub(crate) async fn identity(&self, bus: &Bus, iface: &str) -> Result<Option<Identity>> {
         if self.fixture {
             return self.test(bus, "Identity", json!({"interface":iface})).await;
         }

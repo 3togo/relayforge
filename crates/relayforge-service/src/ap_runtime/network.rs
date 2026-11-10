@@ -1,4 +1,5 @@
 //! Owned AP initialization/teardown and journalled forwarding leases.
+pub(super) mod bridge;
 mod devices;
 use super::*;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -9,6 +10,10 @@ struct Netdev {
     up: bool,
     connected: bool,
     addresses: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    master: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    address_assignment: Option<u8>,
 }
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -198,6 +203,8 @@ impl Kernel<'_> {
                             up: false,
                             connected: false,
                             addresses: Vec::new(),
+                            master: None,
+                            address_assignment: None,
                         },
                     );
                     s.phys.insert(name.into(), phy);
@@ -308,6 +315,15 @@ impl Kernel<'_> {
             connected,
             up: flags.iter().any(|f| f.as_str() == Some("UP")),
             addresses,
+            master: row
+                .get("master")
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .ok_or("Invalid interface master")
+                })
+                .transpose()?,
+            address_assignment: None,
         }))
     }
     async fn edit(
@@ -321,7 +337,7 @@ impl Kernel<'_> {
             .inspect(name)
             .await?
             .ok_or("AP interface disappeared")?;
-        if current.identity != *expected || current.connected {
+        if current.identity != *expected || current.connected || current.master.is_some() {
             return Err("AP identity or station connection changed");
         }
         let args: Vec<&str> = match operation {
@@ -527,6 +543,7 @@ impl InterfaceIntent {
             || self.gateway != format!("{}/24", data.fields["GATEWAY"])
             || !["AP", "managed"].contains(&self.baseline.kind.as_str())
             || self.baseline.connected
+            || self.baseline.master.is_some()
             || self.baseline.identity.ifindex == 0
             || self.baseline.addresses.iter().any(|a| nonlocal(a))
         {
@@ -538,6 +555,7 @@ impl InterfaceIntent {
     fn check_current(&self, current: &Netdev) -> Result<()> {
         if current.identity != self.baseline.identity
             || current.connected
+            || current.master.is_some()
             || ![self.baseline.kind.as_str(), "AP"].contains(&current.kind.as_str())
             || current
                 .addresses
@@ -1063,6 +1081,26 @@ pub(super) async fn device_action(
 pub(super) async fn run(p: &Platform, dir: &Directory, operation: &str) -> Result<()> {
     let (mut data, bytes) = snapshot(p, dir)?;
     data.interfaces(p)?;
+    if data.fields["SHARE_METHOD"] == "bridge" {
+        let _lock = dir.transaction_lock(c".network.lock").await?;
+        return match operation {
+            "interface-configure" => {
+                devices::require_release(p, dir, &data).await?;
+                bridge::configure(p, dir, &data).await
+            }
+            "interface-remove" => {
+                devices::reconcile(p, dir, &mut data, &bytes).await?;
+                devices::permit_remove(p, dir, &data).await?;
+                bridge::remove(p, dir, &data).await
+            }
+            "network-check" => {
+                bridge::clean(p, dir, &data).await?;
+                forwarding(p, dir, &data, "network-check").await
+            }
+            "forwarding-release" => forwarding(p, dir, &data, "network-check").await,
+            _ => Err("Existing-bridge mode does not acquire forwarding"),
+        };
+    }
     match operation {
         "interface-configure" | "interface-remove" => {
             let _lock = dir.transaction_lock(c".network.lock").await?;
@@ -1104,6 +1142,13 @@ pub(super) async fn daemon_permit(p: &Platform, dir: &Directory) -> Result<()> {
     let (data, _) = snapshot(p, dir)?;
     data.interfaces(p)?;
     devices::require_release(p, dir, &data).await?;
+    environment::firewall(p, &data.fields["SHARE_METHOD"]).await?;
+    if daemons::frozen(p, &data)?.contains_key("COUNTRY") {
+        radio_plan::check(p, dir, false).await?;
+    }
+    if data.fields["SHARE_METHOD"] == "bridge" {
+        return bridge::ready(p, dir, &data).await;
+    }
     let bytes = dir
         .read("interface.json", true, LIMIT)?
         .ok_or("Configure the AP before launching daemons")?;
@@ -1122,6 +1167,9 @@ pub(super) async fn daemon_permit(p: &Platform, dir: &Directory) -> Result<()> {
 }
 
 pub(super) async fn check_subnet(p: &Platform, dir: &Directory, data: &Snapshot) -> Result<()> {
+    if data.fields["SHARE_METHOD"] == "bridge" {
+        return bridge::guard(p, dir, data).await;
+    }
     let iface = &data.fields["WIFI_IFACE"];
     let kernel = Kernel { p };
     let mut exclude = None;

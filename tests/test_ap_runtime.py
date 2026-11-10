@@ -41,6 +41,7 @@ class Bench:
         self.snapshot=self.directory/'recovery.json'
         self.fields=dict(CONFDIR=str(self.directory),COMMON_CONFDIR=str(self.common),WIFI_IFACE='demo0',VWIFI_IFACE='',INTERNET_IFACE='demo0',BRIDGE_IFACE='',OLD_MACADDR='',NEW_MACADDR='',NO_VIRT='0',SHARE_METHOD='nat',NO_DNS='0',DNS_PORT='',GATEWAY='192.168.12.1',RUNNING_AS_DAEMON='1',DAEMON_PIDFILE=str(self.root/('create-ap-'+'a'*32+'.pid')),ADDED_UNMANAGED='',RULE_COMMENT='wifi-relay-'+self.directory.name,BRIDGE_CREATED='0',PHYSICAL_CONFIGURED='0')
         private(self.root/'firewall.json',dict(filter='',nat=''))
+        private(self.root/'policy-state.json',dict(firewalld_active=False,regulatory='phy#0\ncountry 00: DFS-UNSET\n(2402 - 2472 @ 40), (N/A, 20), (N/A)\n'))
         self.interface('demo0',7,'02:00:00:00:00:07')
 
     def interface(self,name,index,mac):

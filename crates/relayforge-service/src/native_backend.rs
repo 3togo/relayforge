@@ -9,6 +9,26 @@ pub enum Backend {
     CreateAp(Arc<create_ap::Backend>),
 }
 impl Backend {
+    pub async fn environment_preflight(&self, config: &Config, phy: u32) -> Result<()> {
+        match self {
+            Self::CreateAp(b) => b.environment_preflight(config, phy).await,
+            Self::NetworkManager(_) => Ok(()),
+        }
+    }
+    pub fn driver_preflight(&self, config: &Config) -> Result<Option<String>> {
+        match self {
+            Self::CreateAp(b) => b.driver_preflight(config).map(Some),
+            Self::NetworkManager(_) => Ok(None),
+        }
+    }
+    pub async fn bridge_preflight(&self, config: &Config) -> Result<()> {
+        match self {
+            Self::CreateAp(b) => b.bridge_preflight(config).await,
+            Self::NetworkManager(_) => {
+                Err("Existing-bridge sharing requires the native create_ap backend")
+            }
+        }
+    }
     pub fn name(&self) -> &'static str {
         match self {
             Self::NetworkManager(_) => "networkmanager",

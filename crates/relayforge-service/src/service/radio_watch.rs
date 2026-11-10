@@ -4,7 +4,7 @@
 //! switch changes. Losing the radio invalidates every owned AP, so the service stops
 //! sharing instead of reporting a stale active state. Suspend already owns its own
 //! cleanup, so a stop is suppressed while the logind watcher is mid-sleep.
-use crate::Service;
+use super::Service;
 use futures_util::StreamExt;
 use relayforge_core::{Method, OBJECT_PATH};
 use serde_json::Value;
@@ -46,19 +46,12 @@ async fn stop(connection: &Connection) {
     let _ = service.invoke(Method::Stop, Value::Null, connection).await;
 }
 
-/// Resolve the bus-assigned owner so the match rule never depends on name resolution.
-async fn owner(connection: &Connection) -> Option<String> {
-    let proxy = zbus::fdo::DBusProxy::new(connection).await.ok()?;
-    let name = zbus::names::BusName::try_from(NM).ok()?;
-    proxy.get_name_owner(name).await.ok().map(|v| v.to_string())
-}
-
 pub async fn run(connection: Connection) {
     loop {
-        // NetworkManager may start after this service, so keep resolving it.
-        let destination = owner(&connection).await;
-        let target = destination.as_deref().unwrap_or(NM);
-        if let Ok(proxy) = Proxy::new(&connection, target, NM_PATH, PROPERTIES).await {
+        // A well-known destination lets zbus track NameOwnerChanged and filter
+        // signals against the current owner, including after an NM restart.
+        // Pinning a unique name would leave this stream watching the old owner.
+        if let Ok(proxy) = Proxy::new(&connection, NM, NM_PATH, PROPERTIES).await {
             if let Ok(mut signals) = proxy.receive_signal("PropertiesChanged").await {
                 while let Some(message) = signals.next().await {
                     if disabled(&message).await {

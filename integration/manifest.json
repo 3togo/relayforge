@@ -1,0 +1,68 @@
+{
+  "repository": "https://github.com/3togo/gnome-wifi-hotspot",
+  "revision": "12f9f78e2cf4e9f41abacf94fbf5f5524bf47814",
+  "files": {
+    "integration/nm-applet/wifi-relay.c": {
+      "source": "integration/nm-applet/wifi-relay.c",
+      "source_sha256": "8088d5e49216d154565cee503bd5831b4f58f43c245939b0ad0346f168cffe22",
+      "sha256": "7e518391b879f4eb6b9e099f7f6243901c0a43cfb84a2a7460a9135daa0c4875",
+      "adaptations": [
+        "Use RelayForge installed tray path"
+      ]
+    },
+    "integration/nm-applet/wifi-relay.h": {
+      "source": "integration/nm-applet/wifi-relay.h",
+      "source_sha256": "81a725a6ce29c0301c349b4c16cc8493ae6ccae027bfc95d24121b529f8a4d2e",
+      "sha256": "81a725a6ce29c0301c349b4c16cc8493ae6ccae027bfc95d24121b529f8a4d2e",
+      "adaptations": []
+    },
+    "integration/nm-applet/test-menu.c": {
+      "source": "integration/nm-applet/test-menu.c",
+      "source_sha256": "18cf44637e75f542bd0c412d9d9b26291dadcbf13cb4791aaa3b2700e0e7d3e4",
+      "sha256": "18cf44637e75f542bd0c412d9d9b26291dadcbf13cb4791aaa3b2700e0e7d3e4",
+      "adaptations": []
+    },
+    "integration/nm-applet/test.sh": {
+      "source": "integration/nm-applet/test.sh",
+      "source_sha256": "9c3e4e6a9e1947c5200d13f008eeb2f55cda8f8506a2e9a04110893b18f786c9",
+      "sha256": "9c3e4e6a9e1947c5200d13f008eeb2f55cda8f8506a2e9a04110893b18f786c9",
+      "adaptations": []
+    },
+    "integration/nm-applet/relay-menu.patch": {
+      "source": "integration/nm-applet/relay-menu.patch",
+      "source_sha256": "ae438b549c2c7f1942afd5b68425ec3025b10af0099aa9fd318b431d7581228f",
+      "sha256": "ae438b549c2c7f1942afd5b68425ec3025b10af0099aa9fd318b431d7581228f",
+      "adaptations": []
+    },
+    "integration/nm-applet/hotspot-icon.patch": {
+      "source": "integration/nm-applet/hotspot-icon.patch",
+      "source_sha256": "da24e9f0af122f8e23edbabc8a8d64f9b67ed0ed329c3537cc0062a6e49cdbf4",
+      "sha256": "da24e9f0af122f8e23edbabc8a8d64f9b67ed0ed329c3537cc0062a6e49cdbf4",
+      "adaptations": []
+    },
+    "integration/gnome-settings/stable-wifi-device-tabs.patch": {
+      "source": "integration/gnome-settings/stable-wifi-device-tabs.patch",
+      "source_sha256": "8c989be31fad5698ff55ea6ec1e3b3f94bda9194fd0b871673eaa130b9b345f5",
+      "sha256": "8c989be31fad5698ff55ea6ec1e3b3f94bda9194fd0b871673eaa130b9b345f5",
+      "adaptations": []
+    },
+    "integration/gnome-settings/relay-entrypoint.patch": {
+      "source": "integration/gnome-settings/relay-entrypoint.patch",
+      "source_sha256": "e1f9bdd92c732342094d43793564cb56e2f7a1abf0137ba3bb08add62b1b7e75",
+      "sha256": "e1f9bdd92c732342094d43793564cb56e2f7a1abf0137ba3bb08add62b1b7e75",
+      "adaptations": []
+    },
+    "integration/nm-core/native-relay.patch": {
+      "source": "integration/nm-core/native-relay.patch",
+      "source_sha256": "6cb6069653fa3acd0096332979b39e530c01a86d1807e330456dbe9675379256",
+      "sha256": "6cb6069653fa3acd0096332979b39e530c01a86d1807e330456dbe9675379256",
+      "adaptations": []
+    },
+    "integration/minimize-dependencies.py": {
+      "source": "packaging/minimize-integrations.py",
+      "source_sha256": "d2c10f8837ef6ef6a52f1cc8150c15e79344c54db276b0f7013ccf9abc3d5056",
+      "sha256": "d2c10f8837ef6ef6a52f1cc8150c15e79344c54db276b0f7013ccf9abc3d5056",
+      "adaptations": []
+    }
+  }
+}

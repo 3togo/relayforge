@@ -1,0 +1,244 @@
+{
+  "source_receipt_sha256": "8b0b11fc8c43132b17ca0612417e3c11a2d53f6fbdf431640c10e4576895af55",
+  "base_revision": "57c9980084570668577228c324c7a8ea1842f73e",
+  "build_source_id": "85e106df770fb3a46dcc001f9600db6cc9dbe5bbc81de31585cfdd3d097d5f3b",
+  "checks": 36,
+  "python_tests": 329,
+  "summaries": {
+    "build": [],
+    "rust-tests": [
+      "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ],
+    "test_ap_bridge": [
+      "Ran 23 tests in 13.451s",
+      "OK"
+    ],
+    "test_ap_daemons": [
+      "Ran 15 tests in 7.022s",
+      "OK"
+    ],
+    "test_ap_devices": [
+      "Ran 21 tests in 8.083s",
+      "OK"
+    ],
+    "test_ap_firewall": [
+      "Ran 13 tests in 5.426s",
+      "OK"
+    ],
+    "test_ap_instance": [
+      "Ran 11 tests in 2.686s",
+      "OK"
+    ],
+    "test_ap_network": [
+      "Ran 22 tests in 5.504s",
+      "OK"
+    ],
+    "test_ap_radio_plan": [
+      "Ran 9 tests in 0.937s",
+      "OK"
+    ],
+    "test_ap_runtime": [
+      "Ran 23 tests in 8.256s",
+      "OK"
+    ],
+    "test_backend_audit": [
+      "Ran 5 tests in 1.978s",
+      "OK"
+    ],
+    "test_band_switch": [
+      "Ran 17 tests in 12.815s",
+      "OK"
+    ],
+    "test_config_migration": [
+      "Ran 3 tests in 0.014s",
+      "OK"
+    ],
+    "test_config_parity": [
+      "Ran 3 tests in 0.094s",
+      "OK"
+    ],
+    "test_create_ap": [
+      "Ran 18 tests in 8.598s",
+      "OK"
+    ],
+    "test_dbus": [
+      "Ran 18 tests in 3.362s",
+      "OK"
+    ],
+    "test_deb_packaging": [
+      "Ran 3 tests in 2.660s",
+      "OK"
+    ],
+    "test_deployment": [
+      "Ran 20 tests in 18.198s",
+      "OK"
+    ],
+    "test_integration_build": [
+      "Ran 5 tests in 0.017s",
+      "OK"
+    ],
+    "test_live_deployment": [
+      "Ran 16 tests in 21.406s",
+      "OK"
+    ],
+    "test_native_policy": [
+      "Ran 12 tests in 5.053s",
+      "OK"
+    ],
+    "test_networkmanager": [
+      "Ran 16 tests in 7.763s",
+      "OK"
+    ],
+    "test_radio": [
+      "Ran 6 tests in 0.016s",
+      "OK"
+    ],
+    "test_sleep_audit": [
+      "Ran 9 tests in 45.567s",
+      "OK"
+    ],
+    "test_source_export": [
+      "Ran 3 tests in 0.142s",
+      "OK"
+    ],
+    "test_staging": [
+      "Ran 5 tests in 0.003s",
+      "OK"
+    ],
+    "test_suspend": [
+      "Ran 12 tests in 128.090s",
+      "OK"
+    ],
+    "test_system_validation": [
+      "Ran 4 tests in 0.001s",
+      "OK"
+    ],
+    "test_tray_feedback": [
+      "Ran 8 tests in 0.023s",
+      "OK"
+    ],
+    "test_validation_runner": [
+      "Ran 2 tests in 0.000s",
+      "OK"
+    ],
+    "test_worker": [
+      "Ran 7 tests in 2.907s",
+      "OK"
+    ],
+    "desktop-contracts": [
+      "Ran 67 tests in 0.194s",
+      "OK"
+    ],
+    "vendor-provenance": [],
+    "integration-provenance": [],
+    "applet-optimized": [],
+    "applet-sanitized": []
+  },
+  "binary_sha256": "fc56f938544add5860d6215eb213c2146c69dab065d86494b5ef65bca8444fee",
+  "packages": {
+    "create_ap-1/relayforge-gnome_0.1.0~system1_all.deb": {
+      "sha256": "8a5ac1743ad22e599a738c720f060e485cb9fc6035473447d1b3967c35532bab",
+      "bytes": 7326,
+      "depends": "relayforge (= 0.1.0~system1), gnome-shell (>= 45), gnome-shell (<< 52~)"
+    },
+    "create_ap-1/relayforge-tray_0.1.0~system1_all.deb": {
+      "sha256": "bcb7fd5e4bee6853e128888c8cf657ad3686123e23573b22bbaad68a4a8e20cc",
+      "bytes": 5982,
+      "depends": "relayforge (= 0.1.0~system1), gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1"
+    },
+    "create_ap-1/relayforge_0.1.0~system1_amd64.deb": {
+      "sha256": "122d812aeb9e35b186c430a4bff7884bb84340f18991cb4c66dbd9677ed758b9",
+      "bytes": 5327896,
+      "depends": "libc6 (>= 2.39), libgcc-s1 (>= 4.2), dbus, polkitd, network-manager, iw, iproute2, python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, hostapd, dnsmasq-base, iptables"
+    },
+    "create_ap-2/relayforge-gnome_0.1.0~system2_all.deb": {
+      "sha256": "971f2a2a2eef425e878ace86ea58c9226cb755b0a264494450d94d43b534c9f2",
+      "bytes": 7326,
+      "depends": "relayforge (= 0.1.0~system2), gnome-shell (>= 45), gnome-shell (<< 52~)"
+    },
+    "create_ap-2/relayforge-tray_0.1.0~system2_all.deb": {
+      "sha256": "16a0c143ba4aa2d48864624380621b82b4d570baecd9e8fe1238adb604b2f17c",
+      "bytes": 5984,
+      "depends": "relayforge (= 0.1.0~system2), gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1"
+    },
+    "create_ap-2/relayforge_0.1.0~system2_amd64.deb": {
+      "sha256": "220aaf4558fec5d53f50cfe730f2d443f0c2be293e4161393b3e9cc0c67f6421",
+      "bytes": 5327418,
+      "depends": "libc6 (>= 2.39), libgcc-s1 (>= 4.2), dbus, polkitd, network-manager, iw, iproute2, python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, hostapd, dnsmasq-base, iptables"
+    },
+    "networkmanager-2/relayforge-gnome_0.1.0~system2_all.deb": {
+      "sha256": "9ff6fd530162aadcb1614968926218062141409586c59e70ef241d54fe248700",
+      "bytes": 7328,
+      "depends": "relayforge (= 0.1.0~system2), gnome-shell (>= 45), gnome-shell (<< 52~)"
+    },
+    "networkmanager-2/relayforge-tray_0.1.0~system2_all.deb": {
+      "sha256": "4eb855a10577dc8aa3fab555ff4a8b8b2e661bd5dc4f5ecf3133f4c0d4b12cc7",
+      "bytes": 5982,
+      "depends": "relayforge (= 0.1.0~system2), gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1"
+    },
+    "networkmanager-2/relayforge_0.1.0~system2_amd64.deb": {
+      "sha256": "5733c453ab5d671d78fa82ed0b9960f502a2850c7fc57a85a0186000144c7c51",
+      "bytes": 2729328,
+      "depends": "libc6 (>= 2.39), libgcc-s1 (>= 4.2), dbus, polkitd, network-manager, iw, iproute2, python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1"
+    }
+  },
+  "guest": {
+    "os_release": "PRETTY_NAME=\"Ubuntu 26.10\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.10\"\nVERSION=\"26.10 (Stonking Stingray)\"\nVERSION_CODENAME=stonking\nRELEASE_TYPE=stable\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nDOCUMENTATION_URL=\"https://docs.ubuntu.com\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nLOGO=ubuntu-logo\nVENDOR_NAME=\"Canonical\"\nVENDOR_URL=\"https://canonical.com/\"\nUBUNTU_CODENAME=stonking\n",
+    "checks": [
+      "apt-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "apt-create_ap-2",
+      "no-install-activation-create_ap-2",
+      "activation-create_ap-2",
+      "systemd-create_ap-2",
+      "root-polkit-create_ap-2",
+      "unprivileged-credential-denial-create_ap-2",
+      "apt-create_ap-1",
+      "no-install-activation-create_ap-1",
+      "activation-create_ap-1",
+      "systemd-create_ap-1",
+      "root-polkit-create_ap-1",
+      "unprivileged-credential-denial-create_ap-1",
+      "apt-networkmanager-2",
+      "no-install-activation-networkmanager-2",
+      "activation-networkmanager-2",
+      "systemd-networkmanager-2",
+      "root-polkit-networkmanager-2",
+      "unprivileged-credential-denial-networkmanager-2",
+      "active-local-password-free-control-policy",
+      "desktop",
+      "desktop-does-not-request-protected-config",
+      "companion-remove",
+      "companion-reinstall",
+      "remove",
+      "purge",
+      "explicit-config-preserved"
+    ],
+    "versions": "dbus 1.16.2-5ubuntu2\ngnome-shell 51.0-2ubuntu3\nlibgtk-3-0t64 3.24.52-0ubuntu1\nlibgtk-4-1 4.24.1+ds-1\npolkitd 127-3ubuntu1\npython3 3.14.7-3\nsystemd 261.3-0ubuntu3\n",
+    "complete": true
+  },
+  "host_observations_unchanged": {
+    "network": true,
+    "activation": true
+  },
+  "harness_sha256": {
+    "probe.js": "d4c28459b94075f8c973aeeed7439489b504dccb4591aaae76d0af5a7869a779",
+    "desktop.sh": "19e084e2e9096c44fe4518198ffdce4fc0f786d7b4bc214f276d9256bc4011bf",
+    "guest.py": "90a687dbdb75b5783857a337a2ffc8d6f3a33500dd187955ea770266c8840cc5",
+    "run.py": "c57b1b42d955737aed42e0ec03e45c60e2c9ea5a7868a6e9a74773ad9dd3e531"
+  },
+  "guest_input_image_sha256": "6c28ee308c1d8e62f37fced6badf97f89e3751481a014de4e9628412a1d83964",
+  "cloud_image_sha256": "a021682aff9c0d455315230f229138e4d1413c5bce96ec336e453a69086d9c2f",
+  "build_toolchain": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (built from a source tarball)",
+    "gcc": "gcc (Ubuntu 15.3.0-4ubuntu1) 15.3.0"
+  },
+  "date_utc": "2026-10-23"
+}

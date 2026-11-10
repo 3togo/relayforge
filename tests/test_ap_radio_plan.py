@@ -28,6 +28,24 @@ def prepare(b, physical=False):
 
 
 class RadioPlanTests(unittest.TestCase):
+    def test_nl80211_driver_profiles_keep_explicit_security_and_ownership(self):
+        for module in ['ath9k','mt7921e','iwlwifi','rtw88_8723de','rtl8192ce','rtl8xxxu','rtl_test']:
+            with self.subTest(module=module),bench() as b:
+                frozen,_=prepare(b);private(b.root/'radio-module',module)
+                before=read(b);original=frozen.read_bytes()
+                b.invoke('radio-check');b.invoke('radio-check')
+                self.assertEqual(json.loads((b.directory/'radio.json').read_text())['module'],module)
+                self.assertEqual(read(b),before);self.assertEqual(frozen.read_bytes(),original)
+
+    def test_wpa3_raw_psk_rejected_before_radio_baseline_or_child_creation(self):
+        with bench() as b:
+            frozen,_=prepare(b);private(frozen,frozen.read_text()+'WPA_VERSION=3\nUSE_PSK=1\nPASSPHRASE='+'c'*64+'\n')
+            before=read(b);original=frozen.read_bytes()
+            result=b.invoke('radio-check',ok=False)
+            self.assertIn('passphrase for SAE',result.stderr)
+            self.assertEqual(read(b),before);self.assertEqual(frozen.read_bytes(),original)
+            self.assertFalse((b.directory/'radio.json').exists())
+
     def test_baseline_is_private_idempotent_and_does_not_mutate_network(self):
         with bench() as b:
             _,radio=prepare(b);before=read(b);snapshot=b.snapshot.read_bytes()
@@ -61,7 +79,7 @@ class RadioPlanTests(unittest.TestCase):
                 self.assertEqual(frozen.read_bytes(),original);self.assertEqual(read(b),before)
         with bench() as b:
             frozen,_=prepare(b);private(frozen,frozen.read_text()+'WPA_VERSION=1\n')
-            private(b.root/'radio-module','rtl_test');b.invoke('radio-check',ok=False)
+            private(b.root/'radio-module','rtl8192ce');b.invoke('radio-check',ok=False)
             self.assertTrue(frozen.read_text().endswith('WPA_VERSION=1\n'))
         with bench() as b:
             prepare(b,physical=True);private(b.root/'radio-module','brcmfmac')

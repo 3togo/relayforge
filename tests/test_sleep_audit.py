@@ -73,9 +73,20 @@ class SleepAuditTests(unittest.TestCase):
                 bus=connect()
                 try:
                     wait_for(lambda:'hold_property-held' in events(c.path))
-                    with self.assertRaises(GLib.Error):call(bus,'Start')
+                    # The full interface is available as soon as its name is
+                    # owned, but operation replies wait for the initial snapshot.
+                    xml=bus.call_sync('io.github.erhanzeyrek.WifiHotspot',
+                        '/io/github/erhanzeyrek/WifiHotspot',
+                        'org.freedesktop.DBus.Introspectable','Introspect',None,None,
+                        0,5000,None).unpack()[0]
+                    self.assertIn('io.github.erhanzeyrek.WifiHotspot',xml)
+                    thread,result=launch()
+                    time.sleep(.1)
+                    self.assertTrue(thread.is_alive());self.assertEqual(result,[])
                     self.assertFalse(c.events('activation-request'))
                     control(c,hold_property=False)
+                    thread.join(4);self.assertFalse(thread.is_alive())
+                    self.assertIsInstance(result[0],dict);self.assertFalse(result[0]['success'])
                     wait_for(lambda:peek(bus).get('state')=='suspended')
                     self.assertFalse(decode_reply('Start',call(bus,'Start'))['success'])
                     self.assertFalse(status(bus)['desired_active']);c.assert_clean(self)

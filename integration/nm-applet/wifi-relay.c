@@ -369,7 +369,7 @@ toggle_tray (GtkCheckMenuItem *item, gpointer data)
     gboolean visible = gtk_check_menu_item_get_active (item);
     gboolean previous = read_tray_visible (path);
     if (write_tray_visible (path, visible, &error) && visible) {
-        gchar *argv[] = { "/usr/bin/wifi-hotspot-tray", "--show-icon", NULL };
+        gchar *argv[] = { "/usr/bin/python3", "/usr/lib/relayforge/settings/tray.py", "--show-icon", NULL };
         if (!g_spawn_async (NULL, argv, NULL, 0, NULL, NULL, NULL, &error))
             write_tray_visible (path, previous, NULL);
     }
@@ -443,7 +443,7 @@ wifi_relay_add_menu (WifiRelay *relay, GtkWidget *menu)
         item = gtk_check_menu_item_new_with_label ("Show Wi-Fi Relay icon");
         gtk_check_menu_item_set_active (GTK_CHECK_MENU_ITEM (item), read_tray_visible (path));
         g_free (path);
-        gtk_widget_set_sensitive (item, g_file_test ("/usr/bin/wifi-hotspot-tray", G_FILE_TEST_IS_REGULAR));
+        gtk_widget_set_sensitive (item, g_file_test ("/usr/lib/relayforge/settings/tray.py", G_FILE_TEST_IS_REGULAR));
         g_signal_connect (item, "toggled", G_CALLBACK (toggle_tray), relay);
         gtk_menu_shell_append (GTK_MENU_SHELL (submenu), item);
     }

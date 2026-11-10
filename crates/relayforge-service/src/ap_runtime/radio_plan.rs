@@ -1,6 +1,6 @@
 //! Read-only radio policy and a private baseline across native startup phases.
 use super::*;
-use relayforge_core::{config::Config, radio::Capture};
+use relayforge_core::radio::Capture;
 
 #[derive(Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -12,36 +12,13 @@ struct Baseline {
     module: String,
     config_hash: String,
     station_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    regulatory_hash: Option<String>,
 }
 
 fn digest(value: &impl Serialize) -> Result<String> {
     let bytes = serde_json::to_vec(value).map_err(|_| "Cannot bind radio baseline")?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
-fn driver_policy(module: &str, config: &Config) -> Result<()> {
-    if module.is_empty()
-        || module.len() > 128
-        || !module
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    {
-        return Err("Invalid radio driver identity");
-    }
-    if module == "brcmfmac" && config["NO_VIRT"] == "0" {
-        return Err("Native virtual interfaces are unavailable for this radio driver; use a dedicated adapter");
-    }
-    if [
-        "8192cu", "8192ce", "8192du", "8192de", "8723as", "8723au", "8723ae",
-    ]
-    .contains(&module)
-    {
-        return Err("Legacy radio driver requires an unsupported hostapd override");
-    }
-    if module.starts_with("rtl") && config["WPA_VERSION"] == "1" {
-        return Err("Select WPA2 explicitly for this radio driver");
-    }
-    Ok(())
 }
 
 async fn inspect(p: &Platform, iface: &str) -> Result<(relayforge_core::radio::Snapshot, String)> {
@@ -61,6 +38,20 @@ async fn inspect(p: &Platform, iface: &str) -> Result<(relayforge_core::radio::S
         let module = String::from_utf8(module).map_err(|_| "Invalid simulated driver encoding")?;
         return Ok((relayforge_core::radio::Snapshot::parse(&capture)?, module));
     }
+    Ok((
+        radio::Source::System.inspect(iface).await?,
+        module(p, iface)?,
+    ))
+}
+
+pub(super) fn module(p: &Platform, iface: &str) -> Result<String> {
+    interface_name(iface)?;
+    if let Some(root) = &p.fixture {
+        let bytes = Directory::open(root)?
+            .read("radio-module", true, 128)?
+            .ok_or("Missing simulated radio driver")?;
+        return String::from_utf8(bytes).map_err(|_| "Invalid simulated driver encoding");
+    }
     let driver = p.net.join(iface).join("device/driver");
     let link = match fs::read_link(driver.join("module")) {
         Ok(path) => path,
@@ -74,7 +65,7 @@ async fn inspect(p: &Platform, iface: &str) -> Result<(relayforge_core::radio::S
         .and_then(|v| v.to_str())
         .ok_or("Invalid radio module")?
         .to_owned();
-    Ok((radio::Source::System.inspect(iface).await?, module))
+    Ok(module)
 }
 
 pub(super) async fn check(p: &Platform, dir: &Directory, prepare: bool) -> Result<()> {
@@ -85,13 +76,16 @@ pub(super) async fn check(p: &Platform, dir: &Directory, prepare: bool) -> Resul
         return Err("Radio owner exited");
     }
     let config = daemons::frozen(p, &data)?;
+    if config["SHARE_METHOD"] == "bridge" {
+        network::bridge::guard(p, dir, &data).await?;
+    }
     let iface = &config["WIFI_IFACE"];
     let parent = p.interface(iface)?.ok_or("Radio parent disappeared")?;
     if data.interfaces.get(iface) != Some(&parent) {
         return Err("Radio parent identity changed");
     }
     let (radio, module) = inspect(p, iface).await?;
-    driver_policy(&module, &config)?;
+    relayforge_core::ap_policy::driver(&module, &config)?;
     if !["managed", "AP"].contains(&radio.interface_type.as_str())
         || config["NO_VIRT"] == "0" && radio.interface_type != "managed"
     {
@@ -104,6 +98,8 @@ pub(super) async fn check(p: &Platform, dir: &Directory, prepare: bool) -> Resul
     {
         return Err("Frozen radio plan no longer matches the permitted upstream channel");
     }
+    let regulatory_hash = environment::regulatory(p, &config, radio.phy).await?;
+    environment::firewall(p, &config["SHARE_METHOD"]).await?;
     let caps = radio.capabilities;
     let baseline = Baseline {
         version: 1,
@@ -111,6 +107,7 @@ pub(super) async fn check(p: &Platform, dir: &Directory, prepare: bool) -> Resul
         parent,
         phy: radio.phy,
         module,
+        regulatory_hash,
         config_hash: digest(&config)?,
         station_hash: digest(&(
             caps.current_sta_ssid,
