@@ -13,9 +13,11 @@ spec.loader.exec_module(release)
 class CandidateTests(unittest.TestCase):
     def test_subprocesses_use_packaging_compatible_umask(self):
         with patch.object(release.subprocess, 'run') as run:
-            release.run(['fixture'], Path('/'))
+            release.run(['fixture'], Path('/trusted/candidate/source'))
         self.assertEqual(run.call_args.kwargs['umask'], 0o022)
         self.assertTrue(run.call_args.kwargs['check'])
+        self.assertEqual(run.call_args.kwargs['env']['TMPDIR'], '/trusted/candidate')
+        self.assertEqual(run.call_args.kwargs['env']['CARGO_TARGET_DIR'], '/trusted/candidate/source/target')
 
     def test_writable_scratch_ancestor_is_rejected_before_building(self):
         from types import SimpleNamespace

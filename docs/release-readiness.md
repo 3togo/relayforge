@@ -38,7 +38,8 @@ and runs subprocesses with umask 0022 so Debian control directories have valid
 permissions even when the invoking shell uses umask 0077.
 
 The tool exports committed source into a private directory under `~/git/temp/`,
-runs the full offline suite including both applet modes, rejects failures and
+keeps child-process temporary files there and binds Cargo output to that
+snapshot. It runs the full offline suite including both applet modes, rejects failures and
 reported unittest skips, and packages the freshly validated ELF for both
 backends with tray and GNOME companions. Workspace edits are excluded.
 `candidate.json` records the source/tree/archive identity, executable digest and

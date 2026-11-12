@@ -2,7 +2,6 @@
 """Build and validate a committed candidate; never publish or claim hardware qualification."""
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command, cwd):
-    subprocess.run(command, cwd=cwd, check=True, umask=0o022)
+    environment = dict(os.environ, TMPDIR=str(cwd.parent),
+                       CARGO_TARGET_DIR=str(cwd / 'target'))
+    subprocess.run(command, cwd=cwd, check=True, umask=0o022, env=environment)
 
 
 def prepare(repository, revision, output, version=None):
@@ -24,12 +25,11 @@ def prepare(repository, revision, output, version=None):
     check_scratch(scratch)
     output = output.resolve()
     output.mkdir()  # Preserve existing candidates, including failed runs.
-    spec = importlib.util.spec_from_file_location('source_export', repository / 'tools/export-source.py')
-    exporter = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(exporter)
-    source = exporter.export(repository, revision, output / 'source.tar.gz')
     with tempfile.TemporaryDirectory(prefix='relayforge-release-', dir=scratch) as temporary:
         work = Path(temporary)
+        run([sys.executable, str(repository / 'tools/export-source.py'),
+             '--revision', revision, '--output', str(output / 'source.tar.gz')], work)
+        source = json.loads((output / 'source.tar.gz.json').read_text())
         with tarfile.open(output / 'source.tar.gz') as archive:
             archive.extractall(work, filter='data')
         root = work / source['archive_prefix'].rstrip('/')
