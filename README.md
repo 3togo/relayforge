@@ -43,8 +43,9 @@ Its [validation report](docs/native-deployment-validation.md) records the tested
 revision and the remaining privileged/live-deployment gates.
 The [deployment race audit](docs/native-deployment-audit-validation.md) hardens
 interrupted aborts, runtime exclusion, recovery syncing and rollback preflight.
-The compatibility mode retains the original Python engine. These native modes
-are not yet validated production replacements.
+The compatibility mode retains the original Python engine. These native modes have limited qualification, rather than broad production
+certification. The [release qualification ledger](docs/release-readiness.md)
+identifies tested revisions, supported test configurations and remaining gates.
 
 ## Service source layout
 
@@ -381,10 +382,11 @@ The Rust [offline deployment engine](docs/native-deployment.md) can apply and ro
 back a staged payload in a dormant image. It refuses the live root and never enables
 or starts services. The Debian build script creates a local package; no
 distribution package release or automatic live service handover is supplied.
-Staging itself only creates a reviewable payload. Native hotspot activation
-has not been tested on physical hardware. Run only
-in a prepared disposable environment until the migration and hardware gates in
-[the architecture plan](docs/architecture.md) are completed. The original
+Staging itself only creates a reviewable payload. Native create_ap traffic was validated on candidate `9526f6d` with a dedicated
+2.4 GHz adapter, Ethernet upstream and one Android client, including manual
+restart after suspend. This does not qualify the later main commit, the default
+NetworkManager backend, AP+STA, or automatic resume. See the
+[release ledger](docs/release-readiness.md) before choosing a deployment. The original
 checkout, installed services and networking configuration are independent of this
 source project.
 

@@ -1,3 +1,19 @@
+# Unreleased
+
+Release qualification is tracked in [the release ledger](docs/release-readiness.md).
+Current main passed offline CI; the 9526f6d installed-system and physical reports
+cover an earlier candidate. Final-package reruns remain required.
+
+- Added committed-source candidate preparation with full offline checks,
+  freshly validated executable packaging and SHA-256 receipts for both backends.
+- Corrected stale physical-validation guidance and recorded remaining release gates.
+
+The 0.1.2 notes below are historical. They are not current qualification evidence.
+In particular, native create_ap currently refuses new local firewall setup when
+firewalld is active; the historical passthrough claim does not describe its
+current policy. GNOME first-login controls are opt-in, and package installation
+leaves services disabled. Consult the README for current installation behavior.
+
 # RelayForge 0.1.2 (2026-10-30)
 
 0.1.2 folds the AP lifecycle and desktop hotspot integration fixes into the 0.1.1
