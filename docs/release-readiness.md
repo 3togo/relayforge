@@ -15,6 +15,11 @@ published 0.1.2 asset with a differently built package under the same version.
   The [corrected follow-up](qualification-recovery-20261112.md) passed
   NetworkManager automatic resume, Stop suppression, recovery and controlled
   two-client LAN traffic. External timeouts and remaining matrix gates are open.
+- The [create_ap and active-downgrade follow-up](qualification-create-ap-downgrade-20261112.md)
+  passed create_ap traffic, suspend and recovery checks. Its short soak was
+  interrupted by upstream loss. Downgrade to published 0.1.2 passed cleanup
+  and restored traffic, but changed daemon boot enablement from disabled to
+  enabled; the raw preservation test remains failed.
 
 - Main `683668b9c3cf1be717bf9487dd2b0e97462d51d5` passed the
   [hosted offline workflow](https://github.com/3togo/relayforge/actions/runs/42776376770)
@@ -57,11 +62,11 @@ The packages are candidates; this command does not publish or install them.
 | Gate | Required evidence |
 | --- | --- |
 | Final installed-system run | Passed on 8d0a5bb with harness 4ecc12a: 39 checks and matched package hashes. Repeat if implementation or packaging changes. |
-| Final create_ap traffic | Repeat DHCP, DNS, verified HTTPS, stop and cleanup on dedicated hardware using final packages. |
+| Final create_ap traffic | Candidate AP+STA DHCP, DNS paths, verified HTTPS, cleanup, suspend and recovery passed on the selected Intel bench. Its short soak was interrupted by upstream loss; clean long-duration and dedicated-adapter coverage remain open. |
 | Default NetworkManager backend | AP+STA, lifecycle recovery and controlled two-client traffic passed on one iwlwifi radio (Android API 29/34). Dedicated-adapter and broader matrix coverage remain required. |
-| Active-sharing upgrade | Published 0.1.2 → candidate 0.1.3~rc2 passed safe cleanup with active Android traffic; sharing was interrupted and remained idle. Active downgrade and other backend coverage remain required. |
-| Automatic resume | NetworkManager passed 57-second physical sleep, automatic sharing restart, tablet traffic after reselection, and Stop suppression. Repeat on native create_ap; automatic client network reselection is not established. |
-| Recovery | NetworkManager passed cancellation, crash cleanup/restart, upstream loss and radio recovery with preserved profiles; sharing after loss required explicit Start. Native create_ap physical recovery remains required. |
+| Active-sharing upgrade | Published 0.1.2 → candidate 0.1.3~rc2 passed safe cleanup with active Android traffic; sharing was interrupted and remained idle. create_ap rc2 → rc1 same-executable fixture downgrade passed. Candidate NM → published 0.1.2 cleaned up and recovered traffic, but failed boot-enablement preservation; explicit policy restoration was verified separately. |
+| Automatic resume | Both native backends passed approximately 57-second physical sleep, automatic sharing restart, tablet traffic after reselection, and Stop suppression. Automatic client network reselection is not established. |
+| Recovery | Both native backends passed cancellation, crash cleanup/restart, upstream loss and radio recovery with preserved profiles. Sharing after loss required explicit Start; the create_ap soak also observed a real upstream disconnect. |
 | Hardware/client matrix | Two concurrent API 29/34 clients passed a 604-second controlled LAN soak. The 610-second Internet soak had two connect timeouts, also seen in direct external controls; individual attribution remains open. Additional adapters and bands remain unqualified. |
 | Release review | Align README, changelog, feature matrix and package metadata with evidence; use a new version, verify candidate digests and publish matching source/receipts. |
 
