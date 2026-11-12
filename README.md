@@ -392,7 +392,8 @@ connection timeouts. The subsequent
 [create_ap and downgrade checks](docs/qualification-create-ap-downgrade-20261112.md)
 passed functional create_ap traffic and recovery, with an upstream-interrupted
 soak. Downgrade to published 0.1.2 required explicit restoration of daemon boot
-enablement. Broader hardware coverage remains open. See the
+enablement. Use the [boot-policy-preserving rollback command](docs/package-rollback.md)
+for that older archive. Broader hardware coverage remains open. See the
 [release ledger](docs/release-readiness.md) before choosing a deployment. The original
 checkout, installed services and networking configuration are independent of this
 source project.
