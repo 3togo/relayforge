@@ -12,7 +12,7 @@ UNITS = ('relayforge-native.service', 'relayforge-create-ap.service')
 
 
 class PackageHookTests(unittest.TestCase):
-    def hook_calls(self, hook, *arguments):
+    def hook_calls(self, hook, *arguments, apparmor_utils=True):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             log = work / 'commands.jsonl'
@@ -28,7 +28,8 @@ class PackageHookTests(unittest.TestCase):
             command.chmod(0o755)
             for name in ('systemctl', 'deb-systemd-helper', 'deb-systemd-invoke',
                          'aa-complain', 'apparmor_parser'):
-                (work / name).symlink_to(command)
+                if name != 'aa-complain' or apparmor_utils:
+                    (work / name).symlink_to(command)
             subprocess.run(['/bin/sh', str(ROOT / 'packaging' / hook), *arguments],
                            env=dict(os.environ, PATH=str(work), HOOK_LOG=str(log)),
                            check=True, timeout=5)
@@ -42,6 +43,12 @@ class PackageHookTests(unittest.TestCase):
                 calls = self.hook_calls('postinst', *arguments)
                 for call in calls:
                     self.assertFalse(set(call[1:]) & {'enable', 'start', 'restart'}, call)
+
+    def test_install_loads_the_packaged_profile_without_requiring_apparmor_utils(self):
+        calls = self.hook_calls('postinst', 'configure', '', apparmor_utils=False)
+        self.assertFalse(any(call[0] == 'aa-complain' for call in calls))
+        self.assertIn(['apparmor_parser', '-r',
+                       '/etc/apparmor.d/usr.lib.relayforge.relayforge-service'], calls)
 
     def test_removal_stops_both_backends(self):
         calls = self.hook_calls('prerm', 'remove')

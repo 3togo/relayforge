@@ -13,6 +13,16 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] \
         # it at boot. Never undo an administrator's explicit disable.
     fi
 
+    # Load the shipped complain-mode profile before activation/restart. Minimal
+    # installations may provide the parser without the optional aa-complain tool;
+    # deferring profile loading until reboot hides namespace/path regressions.
+    if command -v apparmor_parser >/dev/null 2>&1; then
+        apparmor_parser -r /etc/apparmor.d/usr.lib.relayforge.relayforge-service >/dev/null 2>&1 || true
+    fi
+    if command -v aa-complain >/dev/null 2>&1; then
+        aa-complain /usr/lib/relayforge/relayforge-service >/dev/null 2>&1 || true
+    fi
+
     if [ -d /run/systemd/system ]; then
         systemctl --system daemon-reload >/dev/null 2>&1 || true
         # On upgrade, pick up a new binary only when the service was already running.
@@ -27,9 +37,4 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] \
         done
     fi
 
-    # MAC: ship in complain mode so a too-strict profile cannot break the service
-    # before enforcement is validated against live hardware.
-    if command -v aa-complain >/dev/null 2>&1; then
-        aa-complain /usr/lib/relayforge/relayforge-service >/dev/null 2>&1 || true
-    fi
 fi

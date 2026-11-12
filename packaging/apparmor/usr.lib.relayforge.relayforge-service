@@ -2,7 +2,9 @@
 #
 # Shipped with flags=(complain) and also loaded in complain mode by the package
 # postinst. A MAC profile must be validated against live hardware before it can
-# be enforced; complain mode records violations without blocking.
+# be enforced. attach_disconnected permits pathname lookup for sockets viewed
+# through systemd mount namespaces; complain alone can still return EACCES for
+# disconnected paths. The system-bus socket retains its explicit path rule.
 #
 # The service re-executes itself to spawn gated child daemons, then exec's the
 # AP daemons hostapd and dnsmasq. Those now transition into dedicated child
@@ -10,7 +12,7 @@
 # patterns are confirmed against live hardware.
 #include <tunables/global>
 
-profile /usr/lib/relayforge/relayforge-service flags=(complain) {
+profile /usr/lib/relayforge/relayforge-service flags=(complain,attach_disconnected) {
   #include <abstractions/base>
 
   capability net_admin,

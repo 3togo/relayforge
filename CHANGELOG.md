@@ -6,6 +6,8 @@ cover an earlier candidate. Final-package reruns remain required.
 
 - Added committed-source candidate preparation with full offline checks,
   freshly validated executable packaging and SHA-256 receipts for both backends.
+- Fixed AppArmor disconnected socket lookup under systemd mount namespaces;
+  load the profile during installation before restarting services.
 - Corrected stale physical-validation guidance and recorded remaining release gates.
 
 The 0.1.2 notes below are historical. They are not current qualification evidence.
