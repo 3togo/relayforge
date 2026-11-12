@@ -19,12 +19,21 @@ gsettings set org.gnome.shell disable-user-extensions false
 gnome-shell --headless --wayland --virtual-monitor 1280x800 > /home/ubuntu/results/shell.log 2>&1 &
 shell_pid=$!
 trap 'kill "$shell_pid" 2>/dev/null || true' EXIT
+# Owning the bus name precedes exporting Shell's extension API. Configure the
+# running Shell only after that API exists, rather than racing initialization.
 for attempt in $(seq 1 60); do
-    if gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.gnome.Shell | grep -q true; then break; fi
+    kill -0 "$shell_pid"
+    if gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+        --method org.freedesktop.DBus.Properties.Get org.gnome.Shell.Extensions ShellVersion \
+        >/dev/null 2>&1; then break; fi
     sleep 1
 done
-# Set both extensions in one update; verify the observer as well as the product.
-gsettings set org.gnome.shell enabled-extensions "['relayforge-validation@example.invalid', 'wifi-relay@3togo.github.io']"
+gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+    --method org.freedesktop.DBus.Properties.Set org.gnome.Shell.Extensions UserExtensionsEnabled '<true>'
+for uuid in relayforge-validation@example.invalid wifi-relay@3togo.github.io; do
+    gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+        --method org.gnome.Shell.Extensions.EnableExtension "$uuid" | grep -q true
+done
 wait_extension() {
     local uuid="$1" name="$2" info="/home/ubuntu/results/$2-extension.txt"
     for attempt in $(seq 1 60); do
