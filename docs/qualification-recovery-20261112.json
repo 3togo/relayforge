@@ -1,0 +1,124 @@
+{
+  "date_utc": "2026-11-12",
+  "scope": "NetworkManager AP+STA on one physical radio; not all release gates or platforms",
+  "package_receipt": "qualification-8d0a5bb-20261112.json",
+  "hardware": {
+    "os": "Ubuntu 26.10",
+    "kernel": "7.2.6-070206-generic",
+    "driver": "iwlwifi",
+    "pci_id": "8086:a370",
+    "radio_count": 1,
+    "band": "2.4 GHz",
+    "channel": 12
+  },
+  "clients": {
+    "tablet_api": 34,
+    "tv_api": 29
+  },
+  "suspend": {
+    "active_sleep_seconds": 57.345,
+    "automatic_restart_without_start": true,
+    "same_upstream": true,
+    "resume_to_active_seconds": 26.034,
+    "stopped_sleep_seconds": 57.414,
+    "stopped_after_resume": true,
+    "stopped_observation_seconds": 38.047,
+    "tablet_post_resume_public_https": true,
+    "tablet_reselected_network": true
+  },
+  "recovery": {
+    "startup_cancellation_observed_connecting": true,
+    "startup_result": {
+      "error": "Startup cancelled",
+      "success": false
+    },
+    "cancellation_profiles_preserved": true,
+    "crash_restart_idle_and_clean": true,
+    "upstream_loss_error": "NetworkManager session disconnected",
+    "upstream_recovery_requires_explicit_start": true,
+    "upstream_profiles_preserved": true,
+    "radio_profiles_preserved": true,
+    "radio_reconnect_attempts": 2,
+    "radio_explicit_restart_passed": true
+  },
+  "dns": {
+    "classification": "NOERROR/NODATA matched upstream control; strict NXDOMAIN probes remain unsuccessful",
+    "packet_paths": {
+      "tablet": {
+        "matching_packet_lines": 8,
+        "client_to_gateway": true,
+        "gateway_to_client": true,
+        "upstream_query_seen": true
+      },
+      "tv": {
+        "matching_packet_lines": 8,
+        "client_to_gateway": true,
+        "gateway_to_client": true,
+        "upstream_query_seen": true
+      }
+    }
+  },
+  "external_soak": {
+    "duration_seconds": 610.544,
+    "clients": {
+      "tablet": {
+        "samples": 57,
+        "successes": 56,
+        "body_bytes": 568505
+      },
+      "tv": {
+        "samples": 57,
+        "successes": 56,
+        "body_bytes": 588364
+      }
+    }
+  },
+  "external_soak_clean": false,
+  "direct_upstream_control": {
+    "samples": 116,
+    "successes": 112
+  },
+  "primary_control": {
+    "samples": 62,
+    "successes": 61
+  },
+  "controlled_lan_soak": {
+    "duration_seconds": 604.397,
+    "clients": {
+      "tablet": {
+        "samples": 82,
+        "successes": 82,
+        "body_bytes": 2686976
+      },
+      "tv": {
+        "samples": 82,
+        "successes": 82,
+        "body_bytes": 2686976
+      }
+    }
+  },
+  "controlled_lan": {
+    "body_bytes_per_request": 32768,
+    "complete_responses_required": true,
+    "per_test_certificate_only": true,
+    "hostname_negative_control_both_clients": true,
+    "nat_source_verified": true,
+    "one_service_pid_during_observed_soak": true,
+    "public_internet_test": false
+  },
+  "restoration": {
+    "host_verified": true,
+    "client_power_and_network_verified": true,
+    "probe_files_removed": true,
+    "tv_test_network_forgotten": true,
+    "tablet_test_network_forgotten": true
+  },
+  "harness_sha256": {
+    "suspend-observer-v3.py": "a44e3b06d5b336f31aefc9987bba10928ddc159ccb7714779f7b0bc608c7c326",
+    "recovery-checks-v2.py": "cc307ce6823898e2476d8baabee0ae094862d28b9b7010bd965f30045aef5c6d",
+    "radio-recovery-v3.py": "332ae667261bee969e80b380b4d859a807df14586c2c78e84369b521f94fd000",
+    "two-client-soak-v2.py": "56abbbc83d3b13bb138f8414a9ceb1c9536fa08aec3043724cd16ddc4a990131",
+    "two-client-lan-soak-v3.py": "89ff8132aa3a7ba69ce202152077c3a6c42a8f0c19900fbb471ff10b471c3d2d",
+    "lan-probe-v2/RelayLanHttpsProbe.java": "1769dac4b3e33368916aabce6b5e8ec31277c076043e95feed086d0b0e351d52"
+  }
+}

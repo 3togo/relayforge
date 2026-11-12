@@ -12,7 +12,9 @@ published 0.1.2 asset with a differently built package under the same version.
   It includes the AppArmor startup fix. The subsequent
   [physical qualification attempt](qualification-physical-20261112.md) verified
   candidate NetworkManager AP+STA traffic and safe active-upgrade cleanup.
-  Automatic resume and the full hardware matrix remain unqualified.
+  The [corrected follow-up](qualification-recovery-20261112.md) passed
+  NetworkManager automatic resume, Stop suppression, recovery and controlled
+  two-client LAN traffic. External timeouts and remaining matrix gates are open.
 
 - Main `683668b9c3cf1be717bf9487dd2b0e97462d51d5` passed the
   [hosted offline workflow](https://github.com/3togo/relayforge/actions/runs/42776376770)
@@ -56,11 +58,11 @@ The packages are candidates; this command does not publish or install them.
 | --- | --- |
 | Final installed-system run | Passed on 8d0a5bb with harness 4ecc12a: 39 checks and matched package hashes. Repeat if implementation or packaging changes. |
 | Final create_ap traffic | Repeat DHCP, DNS, verified HTTPS, stop and cleanup on dedicated hardware using final packages. |
-| Default NetworkManager backend | AP+STA passed on one iwlwifi radio with the candidate and an Android 14 client; dedicated-adapter and broader client coverage remain required. |
+| Default NetworkManager backend | AP+STA, lifecycle recovery and controlled two-client traffic passed on one iwlwifi radio (Android API 29/34). Dedicated-adapter and broader matrix coverage remain required. |
 | Active-sharing upgrade | Published 0.1.2 → candidate 0.1.3~rc2 passed safe cleanup with active Android traffic; sharing was interrupted and remained idle. Active downgrade and other backend coverage remain required. |
-| Automatic resume | Verify a retained authorized request restarts automatically, client rejoins, traffic recovers and Stop prevents later restart; manual restart does not close this gate. |
-| Recovery | Radio off/on, upstream loss/recovery, cancellation and service crash/restart; verify no foreign resources are removed and owned state is recovered or clearly retained on ambiguity. |
-| Hardware/client matrix | Two concurrent clients, supported bands, multiple adapters/client OSes and a measured soak; record concrete versions and limitations. |
+| Automatic resume | NetworkManager passed 57-second physical sleep, automatic sharing restart, tablet traffic after reselection, and Stop suppression. Repeat on native create_ap; automatic client network reselection is not established. |
+| Recovery | NetworkManager passed cancellation, crash cleanup/restart, upstream loss and radio recovery with preserved profiles; sharing after loss required explicit Start. Native create_ap physical recovery remains required. |
+| Hardware/client matrix | Two concurrent API 29/34 clients passed a 604-second controlled LAN soak. The 610-second Internet soak had two connect timeouts, also seen in direct external controls; individual attribution remains open. Additional adapters and bands remain unqualified. |
 | Release review | Align README, changelog, feature matrix and package metadata with evidence; use a new version, verify candidate digests and publish matching source/receipts. |
 
 Bridge and band-switch opt-ins remain experimental and absent from packaged

@@ -384,8 +384,11 @@ or starts services. The Debian build script creates a local package; no
 distribution package release or automatic live service handover is supplied.
 Staging itself only creates a reviewable payload. Native create_ap traffic was validated on candidate `9526f6d` with a dedicated
 2.4 GHz adapter, Ethernet upstream and one Android client, including manual
-restart after suspend. This does not qualify the later main commit, the default
-NetworkManager backend, AP+STA, or automatic resume. See the
+restart after suspend. A subsequent
+[NetworkManager qualification](docs/qualification-recovery-20261112.md) records
+AP+STA, automatic sharing resume, recovery and controlled two-client traffic on
+one Intel radio using the recorded candidate packages. Its Internet soak had
+connection timeouts, and broader hardware coverage remains open. See the
 [release ledger](docs/release-readiness.md) before choosing a deployment. The original
 checkout, installed services and networking configuration are independent of this
 source project.

@@ -1,6 +1,9 @@
 # Physical qualification attempt — 2026-11-12
 
-Stable release qualification remains incomplete. Raw logs, credentials, device
+The [corrected follow-up](qualification-recovery-20261112.md) records subsequent
+suspend, recovery, two-client checks and complete client cleanup. This report
+describes the earlier attempt. Stable release qualification remains incomplete.
+Raw logs, credentials, device
 identifiers, network addresses, packet captures and rollback archives are private.
 
 ## Tested artifacts and scope
