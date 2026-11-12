@@ -1,8 +1,8 @@
 # Unreleased
 
 Release qualification is tracked in [the release ledger](docs/release-readiness.md).
-Current main passed offline CI; the 9526f6d installed-system and physical reports
-cover an earlier candidate. Final-package reruns remain required.
+Candidate 8d0a5bb passed hosted offline CI and 39 installed-system checks; see
+[its report](docs/qualification-8d0a5bb-20261112.md). Physical reruns remain required.
 
 - Added committed-source candidate preparation with full offline checks,
   freshly validated executable packaging and SHA-256 receipts for both backends.

@@ -6,6 +6,11 @@ published 0.1.2 asset with a differently built package under the same version.
 
 ## Evidence
 
+- [8d0a5bb qualification](qualification-8d0a5bb-20261112.md) passed 39
+  installed-system checks using corrected harness `4ecc12a`. Hosted CI passed
+  80 Rust tests, 459 Python tests and 49 check groups without reported skips.
+  It includes the AppArmor startup fix. No physical rerun was performed.
+
 - Main `683668b9c3cf1be717bf9487dd2b0e97462d51d5` passed the
   [hosted offline workflow](https://github.com/3togo/relayforge/actions/runs/42776376770)
   on 2026-11-10, including applet checks and isolated package file lifecycle.
@@ -15,8 +20,8 @@ published 0.1.2 asset with a differently built package under the same version.
   DHCP, gateway ping, DNS, certificate-verified HTTPS, suspend, manual AP restart
   and cleanup passed. This is evidence for that source, not a later candidate.
 - Later main changes include process-exit cleanup and GNOME switch feedback
-  suppression. Their offline checks passed; installed-system and physical
-  reruns against final packages remain required.
+  suppression. Their offline checks passed; installed-system reruns subsequently passed on
+  8d0a5bb. Physical reruns against final packages remain required.
 
 ## Prepare exact candidate artifacts
 
@@ -45,7 +50,7 @@ The packages are candidates; this command does not publish or install them.
 
 | Gate | Required evidence |
 | --- | --- |
-| Final installed-system run | Run tools/system-validation against these exact packages in a verified disposable Ubuntu image; preserve inputs.json, guest report and package hashes. |
+| Final installed-system run | Passed on 8d0a5bb with harness 4ecc12a: 39 checks and matched package hashes. Repeat if implementation or packaging changes. |
 | Final create_ap traffic | Repeat DHCP, DNS, verified HTTPS, stop and cleanup on dedicated hardware using final packages. |
 | Default NetworkManager backend | Dedicated adapter and AP+STA where supported; upstream must remain connected, with actual client traffic and clean teardown. |
 | Active-sharing upgrade | Upgrade and downgrade while a client transfers traffic; record interruption, service restart behavior, final ownership and cleanup. Never infer continuity from idle upgrade checks. |
