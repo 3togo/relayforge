@@ -9,7 +9,10 @@ published 0.1.2 asset with a differently built package under the same version.
 - [8d0a5bb qualification](qualification-8d0a5bb-20261112.md) passed 39
   installed-system checks using corrected harness `4ecc12a`. Hosted CI passed
   80 Rust tests, 459 Python tests and 49 check groups without reported skips.
-  It includes the AppArmor startup fix. No physical rerun was performed.
+  It includes the AppArmor startup fix. The subsequent
+  [physical qualification attempt](qualification-physical-20261112.md) verified
+  candidate NetworkManager AP+STA traffic and safe active-upgrade cleanup.
+  Automatic resume and the full hardware matrix remain unqualified.
 
 - Main `683668b9c3cf1be717bf9487dd2b0e97462d51d5` passed the
   [hosted offline workflow](https://github.com/3togo/relayforge/actions/runs/42776376770)
@@ -21,7 +24,7 @@ published 0.1.2 asset with a differently built package under the same version.
   and cleanup passed. This is evidence for that source, not a later candidate.
 - Later main changes include process-exit cleanup and GNOME switch feedback
   suppression. Their offline checks passed; installed-system reruns subsequently passed on
-  8d0a5bb. Physical reruns against final packages remain required.
+  8d0a5bb. Physical coverage is limited to the results recorded below.
 
 ## Prepare exact candidate artifacts
 
@@ -53,8 +56,8 @@ The packages are candidates; this command does not publish or install them.
 | --- | --- |
 | Final installed-system run | Passed on 8d0a5bb with harness 4ecc12a: 39 checks and matched package hashes. Repeat if implementation or packaging changes. |
 | Final create_ap traffic | Repeat DHCP, DNS, verified HTTPS, stop and cleanup on dedicated hardware using final packages. |
-| Default NetworkManager backend | Dedicated adapter and AP+STA where supported; upstream must remain connected, with actual client traffic and clean teardown. |
-| Active-sharing upgrade | Upgrade and downgrade while a client transfers traffic; record interruption, service restart behavior, final ownership and cleanup. Never infer continuity from idle upgrade checks. |
+| Default NetworkManager backend | AP+STA passed on one iwlwifi radio with the candidate and an Android 14 client; dedicated-adapter and broader client coverage remain required. |
+| Active-sharing upgrade | Published 0.1.2 → candidate 0.1.3~rc2 passed safe cleanup with active Android traffic; sharing was interrupted and remained idle. Active downgrade and other backend coverage remain required. |
 | Automatic resume | Verify a retained authorized request restarts automatically, client rejoins, traffic recovers and Stop prevents later restart; manual restart does not close this gate. |
 | Recovery | Radio off/on, upstream loss/recovery, cancellation and service crash/restart; verify no foreign resources are removed and owned state is recovered or clearly retained on ambiguity. |
 | Hardware/client matrix | Two concurrent clients, supported bands, multiple adapters/client OSes and a measured soak; record concrete versions and limitations. |
