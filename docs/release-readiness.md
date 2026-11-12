@@ -27,6 +27,11 @@ python3 tools/prepare-release.py --revision HEAD \
   --version 0.1.3~rc1 --output /absolute/new/candidate-directory
 ```
 
+Scratch ancestors must have trusted ownership and no group/world write access,
+as required by deployment fixtures. The command checks this before building,
+and runs subprocesses with umask 0022 so Debian control directories have valid
+permissions even when the invoking shell uses umask 0077.
+
 The tool exports committed source into a private directory under `~/git/temp/`,
 runs the full offline suite including both applet modes, rejects failures and
 reported unittest skips, and packages the freshly validated ELF for both

@@ -3,6 +3,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('prepare_release', Path(__file__).resolve().parents[1] / 'tools/prepare-release.py')
 release = importlib.util.module_from_spec(spec)
@@ -10,6 +11,18 @@ spec.loader.exec_module(release)
 
 
 class CandidateTests(unittest.TestCase):
+    def test_subprocesses_use_packaging_compatible_umask(self):
+        with patch.object(release.subprocess, 'run') as run:
+            release.run(['fixture'], Path('/'))
+        self.assertEqual(run.call_args.kwargs['umask'], 0o022)
+        self.assertTrue(run.call_args.kwargs['check'])
+
+    def test_writable_scratch_ancestor_is_rejected_before_building(self):
+        from types import SimpleNamespace
+        with patch.object(Path, 'stat', return_value=SimpleNamespace(st_uid=release.os.getuid(), st_mode=0o40775)):
+            with self.assertRaisesRegex(ValueError, 'Unsafe scratch ancestor'):
+                release.check_scratch(Path('/untrusted'))
+
     def report(self):
         names = ('build', 'rust-tests', 'desktop-contracts', 'vendor-provenance',
                  'integration-provenance', 'applet-optimized', 'applet-sanitized', 'test_dbus')

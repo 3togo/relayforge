@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,18 +15,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command, cwd):
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, umask=0o022)
 
 
 def prepare(repository, revision, output, version=None):
+    scratch = Path.home() / 'git/temp'
+    scratch.mkdir(parents=True, exist_ok=True)
+    check_scratch(scratch)
     output = output.resolve()
     output.mkdir()  # Preserve existing candidates, including failed runs.
     spec = importlib.util.spec_from_file_location('source_export', repository / 'tools/export-source.py')
     exporter = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(exporter)
     source = exporter.export(repository, revision, output / 'source.tar.gz')
-    scratch = Path.home() / 'git/temp'
-    scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='relayforge-release-', dir=scratch) as temporary:
         work = Path(temporary)
         with tarfile.open(output / 'source.tar.gz') as archive:
@@ -52,6 +54,14 @@ def prepare(repository, revision, output, version=None):
                    'qualification': 'Offline checks and package assembly only. Installed-system and physical qualification required for this exact candidate.'}
         (output / 'candidate.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         return receipt
+
+
+def check_scratch(path):
+    for ancestor in (path.resolve(), *path.resolve().parents):
+        stat = ancestor.stat()
+        sticky_root = stat.st_uid == 0 and stat.st_mode & 0o1000
+        if stat.st_uid not in (0, os.getuid()) or (stat.st_mode & 0o022 and not sticky_root):
+            raise ValueError(f'Unsafe scratch ancestor {ancestor}: deployment fixtures require trusted ownership and no group/world write permission')
 
 
 def digest(path):
