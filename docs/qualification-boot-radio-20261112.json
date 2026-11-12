@@ -76,7 +76,9 @@
   "two_client_rerun": {
     "status": "blocked",
     "reason": "Previously selected API29 TV/projector unreachable by ADB and ping; no replacement client used",
-    "passed": false
+    "passed": false,
+    "historical_session_record": true,
+    "completed_by": "qualification-two-client-intel-20261112.json"
   },
   "published_active_downgrade": {
     "from": "0.1.3~rc2",
@@ -150,5 +152,15 @@
     "launcher_restored": true
   },
   "temporary_server_observer_guard_and_root_screen_closed": true,
-  "unselected_client_untouched": true
+  "unselected_client_untouched": true,
+  "two_client_followup": {
+    "report": "qualification-two-client-intel-20261112.md",
+    "status": "passed",
+    "duration_seconds": 606.026,
+    "tablet_successes": 81,
+    "tablet_samples": 81,
+    "tv_successes": 81,
+    "tv_samples": 81,
+    "original_blocked_record_retained": true
+  }
 }

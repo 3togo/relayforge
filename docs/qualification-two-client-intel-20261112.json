@@ -1,0 +1,115 @@
+{
+  "date_utc": "2026-11-12",
+  "candidate_receipt": "qualification-8d0a5bb-20261112.json",
+  "tested_software_head": "a81cec7199e95074bc872c5868ec29f9f9410c50",
+  "software_ci": "https://github.com/3togo/relayforge/actions/runs/43192946457",
+  "scope": "Same selected API34 tablet and API29 TV; Intel iwlwifi AP+STA, 2.4GHz channel12; same rc2 packages and daemon bytes",
+  "backend": "create_ap",
+  "duration_seconds": 606.026,
+  "clients": {
+    "tablet": {
+      "samples": 81,
+      "successes": 81,
+      "body_bytes": 2654208
+    },
+    "tv": {
+      "samples": 81,
+      "successes": 81,
+      "body_bytes": 2654208
+    }
+  },
+  "controls": {
+    "tablet": {
+      "fresh_ap_identity_and_subnet": true,
+      "awake_unlocked": true,
+      "verified_complete_https": true,
+      "wrong_hostname_rejected": true
+    },
+    "tv": {
+      "fresh_ap_identity_and_subnet": true,
+      "awake_unlocked": true,
+      "verified_complete_https": true,
+      "wrong_hostname_rejected": true
+    }
+  },
+  "radio": {
+    "samples": 200,
+    "station_disconnected_samples": 0,
+    "power_save_on_all_samples": true,
+    "beacon_loss": {
+      "first": 15,
+      "last": 15
+    },
+    "beacon_rx": {
+      "first": 3257,
+      "last": 9029
+    },
+    "tx_retries": {
+      "first": 93,
+      "last": 851
+    },
+    "tx_failed": {
+      "first": 0,
+      "last": 0
+    },
+    "fixture_requests": 164,
+    "all_fixture_requests_used_intel_nat_source": true
+  },
+  "supplicant_intel_disconnect_events": 0,
+  "supplicant_intel_beacon_loss_events": 0,
+  "kernel_intel_connection_loss_events": 0,
+  "service_pid_active_timestamp_restart_count_unchanged": true,
+  "restart_count": 0,
+  "client_ap_identity_checks": {
+    "count": 42,
+    "all_passed": true
+  },
+  "historical_disconnect_cause_established": false,
+  "daemon_changed_for_rerun": false,
+  "restoration": {
+    "complete": true,
+    "original_packages_files_modes": true,
+    "configuration": true,
+    "upstream": true,
+    "original_service": true,
+    "owned_resources_absent": true,
+    "apparmor_removed": true,
+    "wakealarm_cleared": true,
+    "forwarding": true,
+    "fixture_route_removed": true,
+    "independent_usb_station_preserved": true,
+    "original_station_power_save_preserved": true,
+    "dependency_marks_verified": true,
+    "configured_dependencies_verified": true,
+    "no_create_ap_firewall_tags": true,
+    "no_relayforge_apparmor_profiles": true
+  },
+  "clients_restoration": {
+    "tablet": {
+      "test_network_forgotten": true,
+      "original_network_identities_preserved": true,
+      "original_home_network": true,
+      "temporary_files_absent": true,
+      "returned_to_launcher": true
+    },
+    "tv": {
+      "test_network_forgotten": true,
+      "original_network_identities_preserved": true,
+      "original_saved_network_count": 61,
+      "original_home_network": true,
+      "temporary_files_absent": true,
+      "returned_to_launcher": true
+    }
+  },
+  "both_clients_original_power_verified": true,
+  "temporary_server_tunnel_observer_guard_and_root_screen_closed": true,
+  "unselected_android_client_and_unrelated_sessions_untouched": true,
+  "harness_sha256": {
+    "lan-soak-two-client-v1.py": "72944cbc2cb245aecc6f0756b7dd83db8b0af0750314e8def34ac6379f8f4b79",
+    "controls-two-client-v1.py": "fe76795101aad5438b985006b61115b5ea7dbcaddb2a203ed4344ab20c83d9c9",
+    "radio-observer-two-client-v1.py": "461f2374c0c45c51fb6dec7b4470535391c8cc72c6d73ba4b3cfa24da1c8a796",
+    "restore-two-client-v1.py": "6eab9ab5368fe5b91e7700b7550b39b15e2bcf706130f5573d712cdabc6be2fa",
+    "verify-final-two-client-v1.py": "096f37fcd5c0de19ad79ef78481e57d166efe96e22b06325aa53f86673678ef6",
+    "cleanup-clients-two-client-v1.py": "1c06241477079df8bce1f8b607d1725b2b6ab4e4a2d959ff2fddb3062cf3aaa6"
+  }
+}

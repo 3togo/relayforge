@@ -24,8 +24,14 @@ published 0.1.2 asset with a differently built package under the same version.
   verified the [rollback command](package-rollback.md) against actual 0.1.2,
   including preserved disabled boot policy and traffic recovery. A 603-second
   tablet-only create_ap run through the Intel station passed. The TV was
-  unavailable, so the two-client rerun remains blocked. Earlier LAN fixtures
+  unavailable, so the two-client rerun remained blocked in that session. Earlier LAN fixtures
   used USB-station egress; their original reports now disclose that limit.
+- The [completed two-client Intel run](qualification-two-client-intel-20261112.md)
+  passed 606.026 seconds with 81/81 complete HTTPS transfers per selected client,
+  fresh identity checks, unchanged service state and no new Intel beacon loss.
+  All fixture requests used the Intel station. The historical disconnect's cause
+  remains unresolved. Hosted offline checks passed at unchanged software head
+  [a81cec7](https://github.com/3togo/relayforge/actions/runs/43192946457).
 
 - Main `683668b9c3cf1be717bf9487dd2b0e97462d51d5` passed the
   [hosted offline workflow](https://github.com/3togo/relayforge/actions/runs/42776376770)
@@ -68,12 +74,12 @@ The packages are candidates; this command does not publish or install them.
 | Gate | Required evidence |
 | --- | --- |
 | Final installed-system run | Passed on 8d0a5bb with harness 4ecc12a: 39 checks and matched package hashes. Repeat if implementation or packaging changes. |
-| Final create_ap traffic | Candidate AP+STA DHCP, DNS paths, verified HTTPS, cleanup, suspend and recovery passed on the selected Intel bench. Its original two-client short soak was interrupted by upstream loss. A 603-second tablet-only rerun through the Intel station passed; two-client, clean long-duration and dedicated-adapter coverage remain open. |
+| Final create_ap traffic | Candidate AP+STA DHCP, DNS paths, verified HTTPS, cleanup, suspend and recovery passed on the selected Intel bench. Its original two-client short soak was interrupted by upstream loss. A 603-second tablet-only run and corrected 606-second two-client run through the Intel station passed. Longer-duration and dedicated-adapter coverage remain open; the earlier disconnect cause is unresolved. |
 | Default NetworkManager backend | AP+STA, lifecycle recovery and controlled two-client traffic passed on one iwlwifi radio (Android API 29/34). Dedicated-adapter and broader matrix coverage remain required. |
 | Active-sharing upgrade | Published 0.1.2 → candidate 0.1.3~rc2 passed safe cleanup with active Android traffic; sharing was interrupted and remained idle. create_ap rc2 → rc1 same-executable fixture downgrade passed. Plain APT candidate NM → published 0.1.2 failed boot-policy preservation. The documented rollback command now passed the same active transition with automatic policy restoration and verified traffic afterward. |
 | Automatic resume | Both native backends passed approximately 57-second physical sleep, automatic sharing restart, tablet traffic after reselection, and Stop suppression. Automatic client network reselection is not established. |
 | Recovery | Both native backends passed cancellation, crash cleanup/restart, upstream loss and radio recovery with preserved profiles. Sharing after loss required explicit Start; the create_ap soak also observed a real upstream disconnect. |
-| Hardware/client matrix | Two concurrent API 29/34 clients passed a 604-second controlled LAN soak through USB-station egress, rather than loaded Intel egress. The corrected Intel two-client rerun is blocked on the unavailable TV. The 610-second Internet soak had two connect timeouts, also seen in direct external controls; individual attribution remains open. Additional adapters and bands remain unqualified. |
+| Hardware/client matrix | Two concurrent API 29/34 clients passed a 604-second controlled LAN soak through USB-station egress, rather than loaded Intel egress. The corrected Intel run then passed 606.026 seconds with 81/81 complete responses per selected client and no new Intel beacon loss. The 610-second Internet soak had two connect timeouts, also seen in direct external controls; individual attribution remains open. Additional adapters and bands remain unqualified. |
 | Release review | Align README, changelog, feature matrix and package metadata with evidence; use a new version, verify candidate digests and publish matching source/receipts. |
 
 Bridge and band-switch opt-ins remain experimental and absent from packaged
