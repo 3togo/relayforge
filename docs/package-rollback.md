@@ -31,6 +31,6 @@ request to share are separate settings.
 If the machine loses power during APT, read the receipt's `before` values,
 complete or repair the package transaction, restore those values with
 `systemctl enable` or `systemctl disable`, and verify `systemctl is-enabled`.
-The command cannot guarantee restoration across power loss or an uncatchable
-process termination. Plain APT downgrade to the unmodified 0.1.2 archive still
+The command cannot guarantee restoration across power loss or termination of
+the installer process. Plain APT downgrade to the unmodified 0.1.2 archive still
 has its historical enablement behavior.

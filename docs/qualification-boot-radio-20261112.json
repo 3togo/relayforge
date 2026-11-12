@@ -1,0 +1,154 @@
+{
+  "date_utc": "2026-11-12",
+  "candidate_receipt": "qualification-8d0a5bb-20261112.json",
+  "daemon_executable_changed_for_followup": false,
+  "historical_disconnect": {
+    "window_utc": [
+      "08:01:30",
+      "08:05:00"
+    ],
+    "intel_beacon_loss_notifications": 10,
+    "independent_usb_beacon_loss_notifications": 45,
+    "intel_disconnect_utc": "08:04:35",
+    "locally_generated": true,
+    "reason_code": 4,
+    "bssid_ignore_seconds": 10,
+    "firmware_crash_recorded": false,
+    "root_cause_established": false
+  },
+  "egress_correction": {
+    "earlier_lan_fixture_egress": "independent USB station",
+    "followup_lan_fixture_egress": "Intel AP+STA station",
+    "temporary_fixture_route_verified": true,
+    "power_save_changed": false
+  },
+  "idle_baseline": {
+    "duration_seconds": 301.28,
+    "samples": 100,
+    "station_disconnected_samples": 0,
+    "power_save_on_all_samples": true,
+    "beacon_loss": {
+      "first": 15,
+      "last": 15
+    },
+    "beacon_rx": {
+      "first": 16,
+      "last": 2834
+    },
+    "tx_retries": {
+      "first": 0,
+      "last": 1
+    },
+    "tx_failed": {
+      "first": 0,
+      "last": 0
+    }
+  },
+  "create_ap_tablet_soak": {
+    "duration_seconds": 602.725,
+    "clients": {
+      "tablet": {
+        "samples": 91,
+        "successes": 91,
+        "body_bytes": 2981888
+      }
+    },
+    "samples": 199,
+    "station_disconnected_samples": 0,
+    "power_save_on_all_samples": true,
+    "beacon_loss": {
+      "first": 15,
+      "last": 15
+    },
+    "beacon_rx": {
+      "first": 3182,
+      "last": 8975
+    },
+    "tx_retries": {
+      "first": 1,
+      "last": 91
+    },
+    "tx_failed": {
+      "first": 0,
+      "last": 0
+    }
+  },
+  "two_client_rerun": {
+    "status": "blocked",
+    "reason": "Previously selected API29 TV/projector unreachable by ADB and ping; no replacement client used",
+    "passed": false
+  },
+  "published_active_downgrade": {
+    "from": "0.1.3~rc2",
+    "to": "0.1.2",
+    "method": "tools/install-packages.py; explicit boot-policy preservation around APT",
+    "installer_sha256": "2c710a4bb44d35c1c5b9e170aa400267393a5895f58b238fd97f4794253c503c",
+    "published_archive_unchanged": true,
+    "published_asset_sha256": "cc09dd9c55d3f5fb8cdeb2f6ed212e49f94f0149f9a8af0c2e4ff7d1de73d96d",
+    "enablement_preserved": true,
+    "main_pid_changed": true,
+    "old_interface_absent": true,
+    "old_ap_profile_absent": true,
+    "owned_journal_absent": true,
+    "config_preserved": true,
+    "same_upstream": true,
+    "installed_elf_matches_published_asset": true,
+    "executable_bytes_changed": true,
+    "boot_policy_before": {
+      "relayforge-native.service": "disabled",
+      "relayforge-create-ap.service": "not-found"
+    },
+    "boot_policy_after": {
+      "relayforge-native.service": "disabled",
+      "relayforge-create-ap.service": "not-found"
+    },
+    "apt_exit_code": 0,
+    "restoration_errors": [],
+    "complete": true,
+    "sharing_after_install": "idle, no desired request",
+    "post_explicit_start": {
+      "duration_seconds": 33.466,
+      "clients": {
+        "tablet": {
+          "samples": 5,
+          "successes": 5,
+          "body_bytes": 163840
+        }
+      },
+      "wrong_hostname_rejected": true
+    }
+  },
+  "tests": {
+    "new_rollback_unit_tests": 7,
+    "existing_package_hook_tests": 4,
+    "all_passed": true
+  },
+  "restoration": {
+    "complete": true,
+    "original_packages_files_modes": true,
+    "configuration": true,
+    "upstream": true,
+    "original_service": true,
+    "owned_resources_absent": true,
+    "apparmor_removed": true,
+    "wakealarm_cleared": true,
+    "forwarding": true,
+    "fixture_route_removed": true,
+    "independent_usb_station_preserved": true,
+    "original_station_power_save_preserved": true,
+    "dependency_marks_verified": true,
+    "configured_dependencies_verified": true,
+    "no_create_ap_firewall_tags": true,
+    "no_relayforge_apparmor_profiles": true
+  },
+  "tablet_restoration": {
+    "test_network_forgotten": true,
+    "original_saved_network_identities_preserved": true,
+    "temporary_probe_certificate_and_xml_removed": true,
+    "power_restored": true,
+    "original_home_network_confirmed": true,
+    "launcher_restored": true
+  },
+  "temporary_server_observer_guard_and_root_screen_closed": true,
+  "unselected_client_untouched": true
+}

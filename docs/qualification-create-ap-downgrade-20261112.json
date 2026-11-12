@@ -118,5 +118,9 @@
     "create-ap-recovery-v1.py": "09ef74d2c310273a281757f35f699b0a49f785caa69d915fdd554818c1963732",
     "create-ap-radio-recovery-v1.py": "d5bdf2f33a5c230d608a1808383ff7e7ea9dd8b0d41e9175d089ca658212f3ee",
     "suspend-observer-v3.py": "a44e3b06d5b336f31aefc9987bba10928ddc159ccb7714779f7b0bc608c7c326"
+  },
+  "later_egress_clarification": {
+    "report": "qualification-boot-radio-20261112.md",
+    "original_controlled_lan_egress": "Independent USB station; original counts do not establish loaded forwarding through the Intel station"
   }
 }

@@ -120,5 +120,9 @@
     "two-client-soak-v2.py": "56abbbc83d3b13bb138f8414a9ceb1c9536fa08aec3043724cd16ddc4a990131",
     "two-client-lan-soak-v3.py": "89ff8132aa3a7ba69ce202152077c3a6c42a8f0c19900fbb471ff10b471c3d2d",
     "lan-probe-v2/RelayLanHttpsProbe.java": "1769dac4b3e33368916aabce6b5e8ec31277c076043e95feed086d0b0e351d52"
+  },
+  "later_egress_clarification": {
+    "report": "qualification-boot-radio-20261112.md",
+    "original_controlled_lan_egress": "Independent USB station; original counts do not establish loaded forwarding through the Intel station"
   }
 }

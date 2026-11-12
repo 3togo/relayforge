@@ -61,6 +61,11 @@ NXDOMAIN probes remained unsuccessful; their result was not relabeled as success
 | Controlled TLS identity | The LAN fixture used a per-test certificate and HTTPS hostname verification; both wrong-hostname controls failed at TLS. Device trust stores were unchanged. |
 | Service continuity | The service PID remained unchanged across the observed soak telemetry. This is an availability check, not a throughput or memory-performance benchmark. |
 
+Later investigation identified the server-observed NAT address as the bench's
+independent USB station, rather than the Intel AP+STA station. This confirms
+local forwarding through the bench but does not certify that soak's egress
+through the Intel station.
+
 The controlled LAN soak isolates the local forwarding path; it does not replace
 the public Internet result. The two Internet client timeouts remain unattributed,
 and a clean WAN reliability result is still open.

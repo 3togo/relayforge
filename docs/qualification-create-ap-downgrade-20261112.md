@@ -42,6 +42,11 @@ transitions used the USB tablet, avoiding dependence on wireless ADB while its
 AP interface was intentionally removed. Interrupted traffic was expected;
 uninterrupted sharing is not claimed.
 
+The original controlled LAN fixture observed NAT through the independent USB
+station, as identified in the later radio investigation. These transfer counts
+qualify forwarding through the bench, not loaded egress through the Intel
+station. The selected Intel station remained the AP+STA lifecycle dependency.
+
 ## Downgrade to the published 0.1.2 release
 
 With verified tablet traffic running, the NetworkManager candidate was downgraded
@@ -81,4 +86,6 @@ remain private.
 
 Remaining qualification limits are the observed upstream/Internet instability,
 additional hardware/bands/kernels and historical downgrade boot-policy handling.
-See the [release ledger](release-readiness.md). No release asset was published.
+The [boot-policy and radio follow-up](qualification-boot-radio-20261112.md)
+records the guarded rollback fix and a single-client rerun. See the
+[release ledger](release-readiness.md). No release asset was published.

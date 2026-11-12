@@ -84,6 +84,7 @@ def install(packages, receipt):
             # every unit, even if restoring another unit fails; never stop/start
             # the service as a side effect of restoring its boot policy.
             errors = []
+            after = {}
             for unit, wanted in before.items():
                 try:
                     actual = unit_state(unit)
@@ -97,11 +98,13 @@ def install(packages, receipt):
                         fixed = run('systemctl', operation, unit)
                         if fixed.returncode:
                             raise RuntimeError(fixed.stdout.strip())
-                    if unit_state(unit) != wanted:
+                    after[unit] = unit_state(unit)
+                    if after[unit] != wanted:
                         raise RuntimeError('Boot policy verification failed')
                 except Exception as error:
                     errors.append(f'{unit}: {error}')
             report['restoration_errors'] = errors
+            report['after'] = after
             report['boot_policy_preserved'] = not errors
             report['complete'] = not errors and report.get('apt_exit_code') == 0
             save()
