@@ -23,11 +23,30 @@ for attempt in $(seq 1 60); do
     if gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.gnome.Shell | grep -q true; then break; fi
     sleep 1
 done
-gnome-extensions enable relayforge-validation@example.invalid
-gnome-extensions enable wifi-relay@3togo.github.io
-sleep 5
-gnome-extensions info wifi-relay@3togo.github.io | tee /home/ubuntu/results/extension.txt
-grep -q 'State: ACTIVE' /home/ubuntu/results/extension.txt
+# Set both extensions in one update; verify the observer as well as the product.
+gsettings set org.gnome.shell enabled-extensions "['relayforge-validation@example.invalid', 'wifi-relay@3togo.github.io']"
+wait_extension() {
+    local uuid="$1" name="$2" info="/home/ubuntu/results/$2-extension.txt"
+    for attempt in $(seq 1 60); do
+        kill -0 "$shell_pid"
+        gnome-extensions info "$uuid" > "$info" 2>&1 || true
+        if grep -q 'State: ACTIVE' "$info"; then return; fi
+        sleep 1
+    done
+    cat "$info"
+    gsettings get org.gnome.shell enabled-extensions
+    return 1
+}
+wait_extension relayforge-validation@example.invalid observer
+wait_extension wifi-relay@3togo.github.io product
+cp /home/ubuntu/results/product-extension.txt /home/ubuntu/results/extension.txt
+# The observer's first sample proves enable() ran, even before a window exists.
+for attempt in $(seq 1 60); do
+    if [ -s /home/ubuntu/results/windows.json ]; then break; fi
+    kill -0 "$shell_pid"
+    sleep 1
+done
+test -s /home/ubuntu/results/windows.json
 wait_window() {
     local pid="$1" name="$2"
     for attempt in $(seq 1 60); do
